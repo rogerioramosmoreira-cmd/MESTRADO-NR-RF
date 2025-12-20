@@ -6,101 +6,84 @@ import numpy as np
 import os
 import shutil
 #================================================================================================================
-#Função verifica se a arquivos em csv e procura arquivos 
-def caminhos_csv(caminho_pasta):
-    nome_arquivos = None
+#Modificação total do codigo de limpeza
+'''''
+print("--- 1. Carregando e Limpando os Dados ---")
 
-    for arquivo in os.listdir(caminho_pasta):
-        if arquivo.endswith(".csv"):
-            nome_arquivos = arquivo
-            print("Arquivos encontados!!!")
-            break
-    if nome_arquivos != None:
-        caminho_completo = os.path.join(caminho_pasta, nome_arquivos)
-        dados = pd.read_csv(caminho_completo)
-        return dados
-    else: print("Não nenhum arquivo **csv**")
-    return dados
-    
-DF = caminhos_csv('ML/data')
-Pasta_original = 'R:/Arquivos/Codigos/MLL/ML'
+def limpar_e_converter_para_numerico(series):
+    if pd.api.types.is_object_dtype(series):
+        try:
+            series_limpa = (
+                series.str.replace('.', '', regex=False)
+                      .str.replace(',', '.', regex=False)
+                      .str.strip()
+            )
+            return pd.to_numeric(series_limpa, errors='raise')
+        except (ValueError, AttributeError):
+            return series
+    return series
 
-#================================================================================================================
+try:
+    DF = pd.read_csv('ML/data/dados_processados_2.csv') 
+except FileNotFoundError:
+    print("ERRO: O arquivo 'dados_processados_2.csv' não foi encontrado.")
+    exit()
 
-#Verifica valores Nulos e os substitui
-if(DF.isnull() == 0).all().all():
-        if(DF.isnull().values.all()):
-            DF.dropna(inplace=True)
-            print("Foram encontrados valores nulos no DataFrame e removidos")
-else:
-        print("Não há valores nulos no DataFrame")
+DF.columns = DF.columns.str.strip()
 
-#================================================================================================================
-#Verifica valores fora da curva 
-for Linha in DF.index:
-        for coluna in DF.columns:
-            valor_celula = DF.loc[Linha, coluna]
-            if valor_celula > 3000 or valor_celula < 1:
-                DF.loc[valor_celula, coluna] = np.nan
-                print("A valores fora da curva")
-            else:
-                print("Valore está dentro da curva") 
-                break
-          
+if 'Unnamed: 0' in DF.columns:
+    DF = DF.drop(columns=['Unnamed: 0'])
 
-#================================================================================================================
-#Substitui os virgulas por pontos 
-for colunas_1 in DF.columns:
-        if DF[colunas_1].dtype == 'object' or DF[colunas_1].dtype == 'numeric' :
-            try:
-                DF.to_csv('dados execel - Table 1 - dados execel - Table 1.csv.csv',  decimal='.', index=True)
-                DF[colunas_1] = DF[colunas_1].str.replace(',', '.', regex=False)
-                Escrever = pd.to_numeric(DF[colunas_1], errors='coerce')
-                print(Escrever.head())
-            except Exception as e:
-                print(f"Não foi possivel subistituir as , por ., talvez já exista esse valor: {e}")
-                break
-#================================================================================================================
-#Enviar arquivo para pasta data 
+DF = DF.apply(limpar_e_converter_para_numerico)
 
-pasta_destino = 'ML/data'
+print("\n--- Dados após limpeza e conversão ---")
+DF.info()
 
-arquivo_para_mover = 'dados execel - Table 1 - dados execel - Table 1.csv.csv'
+print("\n--- 2. Preparando os Dados para o Modelo ---")
 
-caminho_origem = os.path.join('.' , arquivo_para_mover )
+Coluna_alvo = "CBR"
+DF.dropna(inplace=True)
+DF.reset_index(drop=True, inplace=True)
 
+if Coluna_alvo not in DF.columns:
+    print(f"ERRO: A coluna alvo '{Coluna_alvo}' foi removida durante a limpeza.")
+    exit()
+'''
+def Verificar_CSV(caminho_pasta):
+    caminho_Arquivo = None
+    numeracao = 0
+    arquivos_csv_encontrados = []
 
-if os.path.isfile(caminho_origem):
-    print(" -> Arquivo encontrado!")
-    
     try:
-      
-        os.makedirs(pasta_destino, exist_ok=True)
+        for arquivo in os.listdir(caminho_pasta):
+            if arquivo.endswith('.csv'):
+                arquivos_csv_encontrados.append(arquivo)
+                numeracao += 1
+                print(f'>>>>>>>>>>>>>>>>>>>>>>!!!!Arquivos encotrado!!!!<<<<<<<<<<<<<<<<< \n Nome dos arquivos: {numeracao} - {arquivo}')
         
-        
-        arquivos_no_destino = [f for f in os.listdir(pasta_destino) if os.path.isfile(os.path.join(pasta_destino, f))]
-        quantidade_existente = len(arquivos_no_destino)
-        
-        print(f" -> A pasta de destino '{pasta_destino}' já contém {quantidade_existente} arquivos.")
-        
-        novo_nome = f'dados_processados_{quantidade_existente + 1}.csv'
-        
+        if not arquivos_csv_encontrados:
+            print("Não foi possivel encotrar nenhum arquivo no formato CSV\n")
+            return None
 
-        caminho_destino_completo = os.path.join(pasta_destino, novo_nome)
-        
-        print(f" -> O arquivo será movido e renomeado para '{caminho_destino_completo}'")
-        
-  
-        shutil.move(caminho_origem, caminho_destino_completo)
-        
-        print(f"\nSUCESSO! Arquivo movido e renomeado.")
+        while True:
+            try:
+                print("\nEscolha um arquivo que deseja usar!!")
+                escolha_arquivo_str = input("Opção de arquivo: ")
+                escolha_arquivo_int = int(escolha_arquivo_str)
 
-    except Exception as e:
-        print(f"ERRO: Ocorreu um erro durante o processo de movimentação: {e}")
+                if 1 <= escolha_arquivo_int <= numeracao:
+                    nome_arquivo_escolhido = arquivos_csv_encontrados[escolha_arquivo_int - 1]
+                    caminho_completo = os.path.join(caminho_pasta, nome_arquivo_escolhido)
+                    print(f"\nArquivo escolhido foi: {nome_arquivo_escolhido}")
+                    return caminho_completo
+                else:
+                    print(f"Opção inválida! Por favor, escolha um número entre 1 e {numeracao}.")
+            except ValueError:
+                print("Entrada inválida! Por favor, digite um número.")
 
-else:
-    print(f"AVISO: O arquivo '{arquivo_para_mover}' não foi encontrado na pasta principal. Nenhuma ação foi tomada.")
-          
-teste = 'ML/data/dados_processados_2.csv'
+    except FileNotFoundError:
+        print(f"ERRO: O caminho '{caminho_pasta}' não foi encontrado.")
+        return None
 
+DF = Verificar_CSV('R:/Arquivos/Codigos/MLL/ML/data')
 
