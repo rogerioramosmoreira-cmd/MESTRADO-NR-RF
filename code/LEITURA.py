@@ -46,6 +46,7 @@ def Limpeza(df_entrada):
             try:
                 coluna_limpa = (
                     df_entrada[coluna]
+                    .str.replace(' ', '', regex=False)
                     .str.replace('.', '', regex=False)
                     .str.replace(',', '.', regex=False)
                     .str.strip()

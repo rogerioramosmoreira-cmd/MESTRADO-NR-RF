@@ -1,144 +1,83 @@
-#Bibliotecas como modelos de Rede neural 
+import pandas as pd
+import numpy as np
 from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import train_test_split
-
 import tensorflow as tf
 from keras.models import Sequential
 from keras.layers import Dense
-#Bibliotecas para analise de dados 
-import pandas as pd
-import numpy as np
 import matplotlib.pyplot as plt
+from joblib import dump
 
-
-# ... (outras importações)
-
-print("--- 1. Carregando e Limpando os Dados ---")
-
-def limpar_e_converter_para_numerico(series):
-    if pd.api.types.is_object_dtype(series):
-        try:
-            series_limpa = (
-                series.str.replace('.', '', regex=False)
-                      .str.replace(',', '.', regex=False)
-                      .str.strip()
-            )
-            return pd.to_numeric(series_limpa, errors='raise')
-        except (ValueError, AttributeError):
-            return series
-    return series
+# -----
+#PARTE 1:
+print("--- 1. Carregando Dados Pré-Processados ---")
+# Define o caminho para o arquivo que já foi limpo pelo outro script
+caminho_dados_limpos = 'ML/data/dados_processados_5.csv' # IMPORTANTE: Verifique se o nome do arquivo está correto
 
 try:
-    DF = pd.read_csv('ML/data/dados_processados_2.csv') 
+    DF = pd.read_csv(caminho_dados_limpos)
 except FileNotFoundError:
-    print("ERRO: O arquivo 'dados_processados_2.csv' não foi encontrado.")
+    print(f"ERRO: O arquivo de dados limpos '{caminho_dados_limpos}' não foi encontrado.")
+    print("Por favor, execute o script de limpeza primeiro para gerar este arquivo.")
     exit()
 
-DF.columns = DF.columns.str.strip()
 
-if 'Unnamed: 0' in DF.columns:
-    DF = DF.drop(columns=['Unnamed: 0'])
+print("-----Iniciando o processo de dados-----\n")
 
-DF = DF.apply(limpar_e_converter_para_numerico)
 
-print("\n--- Dados após limpeza e conversão ---")
-DF.info()
-
-print("\n--- 2. Preparando os Dados para o Modelo ---")
-
-Coluna_alvo = "CBR"
-DF.dropna(inplace=True)
-DF.reset_index(drop=True, inplace=True)
-
-if Coluna_alvo not in DF.columns:
-    print(f"ERRO: A coluna alvo '{Coluna_alvo}' foi removida durante a limpeza.")
-    exit()
-
-Y = DF[Coluna_alvo]
-X = DF.drop(columns=[Coluna_alvo])
-
-colunas_de_texto_restantes = X.select_dtypes(include=['object']).columns
-if not colunas_de_texto_restantes.empty:
-    print(f"ERRO: As seguintes colunas não são numéricas: {list(colunas_de_texto_restantes)}")
-    X = X.drop(columns=colunas_de_texto_restantes)
-    print("Essas colunas foram removidas de X.")
+Y = DF['CBR ']
+X = DF.drop(columns=['CBR '])
 
 escala = MinMaxScaler()
+
 x_normalizado = escala.fit_transform(X)
 
-# ... resto do seu código ...
-
-X_treino, x_teste, Y_treino, y_teste = train_test_split(
-    x_normalizado,
-    Y,
-    test_size= 0.2,
-    random_state= 42
-
+X_treino, x_Teste, Y_treino, y_teste = train_test_split(
+    x_normalizado, Y, test_size= 0.2, random_state= 42
 )
 
+#Parte 2:
+print("-----Contruindo arquitetura do modelo-----\n")
 modelo = Sequential()
-
-modelo.add(Dense(
-    units=64,
-    activation='relu',
-    input_shape=(X_treino.shape[1],)
-))
-
-modelo.add(Dense(
-    units=32,
-    activation='relu'
-))
-
-modelo.add(Dense(
-    units=16,
-    activation='relu'
-))
-
-modelo.add(Dense(
-    units=8,
-    activation='relu'
-))
-
-modelo.add(Dense(
-    units=4,
-    activation='relu'
-))
-
-modelo.add(Dense(
-    units=10
-))
+modelo.add(Dense(units=64, activation='relu', input_shape=(X_treino.shape[1],)))
+modelo.add(Dense(units=32, activation='relu'))
+modelo.add(Dense(units=16, activation='relu'))
+modelo.add(Dense(units=1, activation='relu'))
+modelo.add(Dense(units=1))
 
 modelo.summary()
 
-modelo.compile(
-    optimizer='adam',
-    loss='mean_squared_error'
-)
+#Parte 4:
+print("-----Compilando modelo-----\n")
+modelo.compile(optimizer='adam', loss='mean_squared_error')
 
-
+#Parte 5:
+print("-----Iniciando o treinamento-----\n")
 historico = modelo.fit(
-     X_treino,
-     Y_treino,
-     epochs=50,              
-     batch_size=32,          
-     validation_data=(x_teste, y_teste),
-     verbose=1
+    X_treino, Y_treino,
+    epochs=100,
+    batch_size=32,
+    validation_data=(X_treino, Y_treino),
+    verbose=1
 )
 
+#Parte 6:
+print("-----Validando o modelo-----\n")
+resultados = modelo.evaluate(x_Teste, y_teste, verbose=0)
+print(f"Loss final do modelo no conjunto do teste (MSE): {resultados}")
 
-resultados = modelo.evaluate(x_teste, y_teste, verbose=0)
+plt.figure(figsize=(10, 6))
+plt.plot(historico.history['loss'], label='Perda de Treino')
+plt.plot(historico.history['val_loss'], label='Perda de validação')
+plt.title("Curvas de Aprendizagem")
+plt.xlabel("Épocas")
+plt.ylabel("Loss (Erro Quadrático Médio)")
+plt.legend()
+plt.grid(True)
+plt.show
 
-
-print(f"Loss (Erro Quadrático Médio): {resultados}")
-
-
-primeira_amostra_teste = x_teste[0]
-
-
-amostra_para_prever = np.expand_dims(primeira_amostra_teste, axis=0)
-
-previsao = modelo.predict(amostra_para_prever)
-
-print(f"Valor Real (da primeira amostra de teste): {y_teste.iloc[0]}")
-print(f"Valor Previsto pela Rede Neural: {previsao[0][0]}")
-
+#Parte 7:
+print("-----Salvando o modelo-----")
+modelo.save('R:/Arquivos/Codigos/MLL/ML/code/Modelo_salvo/modelo_cbr.keras')
+dump(escala, 'R:/Arquivos/Codigos/MLL/ML/code/Modelo_salvo/scaler_cbr.joblib')
+print("Modelo e scaler foram salvos na pasta Modelo_salvo")
