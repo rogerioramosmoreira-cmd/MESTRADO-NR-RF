@@ -24,7 +24,7 @@ except Exception as e:
     print(f"Verifique se os arquivos '{caminho_modelo}' e '{caminho_scaler}' existem na pasta 'saved_model/'.")
     exit()
     
-nomes_das_features = ['ID', '25.4mm', '9.5mm', '4.8mm', '2.0mm', '0.42mm', '0.076mm', 'LL', 'IP', 'Umidade Ótima', 'Densidade máxima']
+nomes_das_features = ['25.4mm', '9.5mm', '4.8mm', '2.0mm', '0.42mm', '0.076mm', 'LL', 'IP', 'Umidade Ótima', 'Densidade máxima']
 
 valores_da_amostra = []
 
@@ -34,7 +34,7 @@ print("Por favor, informe os dados da nova amostra:")
 for feature in nomes_das_features:
     while True:
         try:
-            valor_str = input(f"- Valore para {feature}")
+            valor_str = input(f"- Valore para {feature}: ")
             valor_float = float(valor_str.replace(',','.'))
             valores_da_amostra.append(valor_float)
             break
@@ -43,7 +43,8 @@ for feature in nomes_das_features:
             
 cbr_resultado = prever_cbr(valores_da_amostra, modelo_carregado, scaler_carregado)
 
-print("\n"+"="*40)
-print(f"Valor de CBR previsto é: {cbr_resultado}")
-print("\n"+"="*40)
+print("\n" + "="*40)
+# Aplica a formatação .2f para arredondar para duas casas decimais
+print(f"\nValor de CBR previsto é: {cbr_resultado:.2f}") 
+print("="*40) # Removi o \n para que a linha de "=" fique logo abaixo
 
