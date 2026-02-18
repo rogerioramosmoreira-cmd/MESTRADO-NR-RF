@@ -81,4 +81,4 @@ print("\n" + "="*40)
 # Aplica a formatação .2f para arredondar para duas casas decimais
 # Exibe o resultado final da previsão do CBR.
 print(f"\nValor de CBR previsto é: {cbr_resultado:.2f}") 
-print("="*40) # Removi o \n para que a linha de "=" fique logo abaixo
+print("="*40) 
