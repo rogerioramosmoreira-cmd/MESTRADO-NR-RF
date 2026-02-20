@@ -8,7 +8,84 @@ from keras.models import Sequential  # Tipo de modelo onde as camadas são empil
 from keras.layers import Dense  # Tipo de camada onde todos os neurônios são conectados
 import matplotlib.pyplot as plt  # Usada para gerar gráficos
 from joblib import dump  # Usada para salvar arquivos auxiliares (como o scaler)
+import seaborn as sns
 
+
+def gerar_relatorio_grafico_completo(historico, modelo, x_teste, y_teste):
+    """
+    Gera 3 tipos de gráficos para análise completa do modelo:
+    1. Histórico de Treinamento (para todas as métricas disponíveis).
+    2. Dispersão: Valores Reais vs. Valores Previstos.
+    3. Histograma dos Erros (Resíduos).
+    """
+    
+    # --- 1. GRÁFICOS DO HISTÓRICO (LOSS E MÉTRICAS) ---
+    # Descobre quais métricas existem no histórico (ex: 'loss', 'mse', 'mae')
+    # Filtra apenas as métricas de treino (sem o prefixo 'val_')
+    metricas = [key for key in historico.history.keys() if not key.startswith('val_')]
+
+    for metrica in metricas:
+        plt.figure(figsize=(10, 6))
+        
+        # Plota dados de Treino
+        plt.plot(historico.history[metrica], label=f'{metrica} (Treino)')
+        
+        # Plota dados de Validação (se existirem)
+        val_key = f'val_{metrica}'
+        if val_key in historico.history:
+            plt.plot(historico.history[val_key], label=f'{metrica} (Validação)', linestyle='--')
+            
+        plt.title(f'Evolução de: {metrica.upper()}')
+        plt.xlabel('Épocas')
+        plt.ylabel(metrica)
+        plt.legend()
+        plt.grid(True, alpha=0.3)
+        plt.show()
+
+    # --- PREPARAÇÃO PARA GRÁFICOS DE PREVISÃO ---
+    # Faz previsões com os dados de teste para comparar
+    previsoes = modelo.predict(x_teste).flatten() # .flatten() transforma em array 1D
+    reais = y_teste.values # Garante que estamos usando os valores puros
+    
+    
+    # --- 2. GRÁFICO DE DISPERSÃO (REAL vs PREVISTO) ---
+    plt.figure(figsize=(10, 6))
+    
+    # Plota os pontos (cada ponto é uma amostra)
+    sns.scatterplot(x=reais, y=previsoes, color='blue', alpha=0.6)
+    
+    # Cria uma linha diagonal perfeita (Ideal)
+    # Se o ponto estiver na linha, a previsão foi perfeita
+    min_val = min(min(reais), min(previsoes))
+    max_val = max(max(reais), max(previsoes))
+    plt.plot([min_val, max_val], [min_val, max_val], color='red', linestyle='--', lw=2, label='Previsão Perfeita')
+    
+    plt.title('Comparação: Valor Real vs. Valor Previsto')
+    plt.xlabel('Valor Real (CBR)')
+    plt.ylabel('Valor Previsto (CBR)')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+
+    # --- 3. HISTOGRAMA DE RESÍDUOS (ERROS) ---
+    # Calcula a diferença (erro) para cada amostra
+    erros = reais - previsoes
+    
+    plt.figure(figsize=(10, 6))
+    sns.histplot(erros, kde=True, color='purple')
+    
+    plt.axvline(x=0, color='red', linestyle='--', label='Erro Zero')
+    plt.title('Distribuição dos Erros (Resíduos)')
+    plt.xlabel('Erro (Real - Previsto)')
+    plt.ylabel('Frequência')
+    plt.legend()
+    plt.grid(True, alpha=0.3)
+    plt.show()
+
+# --- COMO USAR ESTA FUNÇÃO NO SEU CODIGO MLL.PY ---
+# Coloque esta linha no final do seu script MLL.py, depois do treinamento:
+# gerar_relatorio_grafico_completo(historico, modelo, x_teste, y_teste)
 # -----
 # PARTE 1: Carregamento e Preparação dos Dados
 print("--- 1. Carregando Dados Pré-Processados ---")
@@ -94,7 +171,7 @@ historico = modelo.fit(
     epochs=100,          # Número de vezes que o modelo passará por todos os dados
     batch_size=32,       # Quantas amostras processar antes de atualizar os pesos
     # Dados usados para validar o modelo durante o treino (Nota: aqui está usando X de treino e Y de teste)
-    validation_data=(X_treino, y_teste), 
+    validation_data=(x_Teste, y_teste), 
     verbose=1            # Mostra a barra de progresso
 )
 
@@ -102,22 +179,8 @@ historico = modelo.fit(
 print("-----Validando o modelo-----\n")
 
 # Avalia o modelo final usando os dados de teste reservados
-resultados = modelo.evaluate(x_Teste, y_teste, verbose=0)
-print(f"Loss final do modelo no conjunto do teste (MSE): {resultados}")
-
-# Configura o gráfico das curvas de aprendizado
-plt.figure(figsize=(10, 6)) # Tamanho da figura
-# Plota a evolução do erro nos dados de treino
-plt.plot(historico.history['loss'], label='Perda de Treino')
-# Plota a evolução do erro nos dados de validação
-plt.plot(historico.history['val_loss'], label='Perda de validação')
-plt.title("Curvas de Aprendizagem") # Título do gráfico
-plt.xlabel("Épocas") # Rótulo do eixo X
-plt.ylabel("Loss (Erro Quadrático Médio)") # Rótulo do eixo Y
-plt.legend() # Mostra a legenda
-plt.grid(True) # Mostra a grade no fundo
-plt.show # Prepara o objeto gráfico (Nota: faltou os parênteses () para exibir a janela)
-
+print("\n--- Gerando Relatório Gráfico Completo ---")
+gerar_relatorio_grafico_completo(historico, modelo, x_Teste, y_teste)
 # Parte 7: Salvamento
 print("-----Salvando o modelo-----")
 
