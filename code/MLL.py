@@ -185,9 +185,9 @@ gerar_relatorio_grafico_completo(historico, modelo, x_Teste, y_teste)
 print("-----Salvando o modelo-----")
 
 # Salva o modelo treinado (arquitetura + pesos) no formato Keras
-modelo.save('R:/Arquivos/Codigos/MLL/ML/code/Modelo_salvo/modelo_cbr.keras')
+modelo.save('ML/code/Modelo_salvo/modelo_cbr.keras')
 
 # Salva o objeto 'scaler' para que possamos normalizar novos dados da mesma forma no futuro
-dump(escala, 'R:/Arquivos/Codigos/MLL/ML/code/Modelo_salvo/scaler_cbr.joblib')
+dump(escala, 'ML/code/Modelo_salvo/scaler_cbr.joblib')
 
 print("Modelo e scaler foram salvos na pasta Modelo_salvo")
