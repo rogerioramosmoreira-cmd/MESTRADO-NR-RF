@@ -1,0 +1,35 @@
+{
+  "cenario": "D4",
+  "features_cenario": [
+    "25.4mm",
+    "9.5mm",
+    "4.8mm",
+    "2.0mm",
+    "0.42mm",
+    "0.076mm",
+    "Umidade Ótima",
+    "Densidade máxima",
+    "IP",
+    "LL"
+  ],
+  "feature_names": [
+    "25.4mm",
+    "9.5mm",
+    "4.8mm",
+    "2.0mm",
+    "0.42mm",
+    "0.076mm",
+    "Umidade Ótima",
+    "Densidade máxima",
+    "IP",
+    "LL",
+    "ratio_9_25",
+    "ratio_4_9",
+    "ratio_2_4",
+    "ratio_042_2",
+    "ratio_076_042",
+    "atividade",
+    "compactacao",
+    "finos_sq"
+  ]
+}

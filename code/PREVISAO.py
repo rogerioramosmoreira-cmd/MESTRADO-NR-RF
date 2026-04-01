@@ -1,5 +1,5 @@
 """
-Sistema de Previsão de CBR — Random Forest
+Sistema de Previsão de CBR — Rede neural
 Carrega o modelo e o scaler salvos pelo treinamento e estima o CBR
 a partir dos dados inseridos pelo usuário.
 

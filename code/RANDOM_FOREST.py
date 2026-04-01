@@ -1,152 +1,265 @@
 """
-Modelo Random Forest Melhorado — Alta Performance
-Meta: MSE < 0.780 no conjunto de teste.
+Modelo Random Forest — Engenharia de Features (Tabela 2) + Cenários D1-D4
+Baseado na configuração experimental da Seção 2.1 da dissertação.
 
-Estrategias aplicadas:
-  1. Feature Engineering — razoes e interacoes entre variaveis granulometricas
-  2. Ensemble — VotingRegressor (RF + GradientBoosting + ExtraTrees)
-  3. Busca extensa — 150 iteracoes, 10-fold CV, scoring=neg_MSE
-  4. Retreino no conjunto treino+validacao apos tuning
-  5. Metricas completas: MSE, RMSE, MAE, R²
-  6. Alerta se MSE <= 1
-  7. Graficos padronizados
+Mudanças em relação à versão anterior:
+  - Feature engineering restaurada com fórmulas exatas da Tabela 2
+  - Correção: atividade = LL - LP  (LP = LL - IP, conforme Tabela 2)
+  - Renomeado: compacidade → compactacao (nomenclatura da Tabela 2)
+  - Adicionado: seleção de cenário D1/D2/D3/D4 conforme Seção 2.1
+  - Pasta de saída por cenário: Modelo_salvo_RF_D1, _D2, _D3, _D4
+  - Metadados do cenário salvos em metadados.json (lidos pelo PREVISAO.py)
 """
 
-# ─────────────────────────────────────────────
-# IMPORTAÇÕES
-# ─────────────────────────────────────────────
-import os                                        # Manipulação de caminhos e criação de pastas
-import warnings                                  # Supressão de avisos não críticos do Python
-import numpy as np                               # Operações numéricas e arrays multidimensionais
-import pandas as pd                              # Leitura do CSV e manipulação tabular
-import matplotlib.pyplot as plt                  # Geração de todos os gráficos
-import matplotlib.gridspec as gridspec           # Layout avançado para múltiplos subplots
+import os
+import json
+import warnings
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
 
-from joblib import dump                          # Serialização do modelo e scaler em arquivos .joblib
-from sklearn.preprocessing import MinMaxScaler  # Normaliza features para o intervalo [0, 1]
+from joblib import dump
+from sklearn.preprocessing import MinMaxScaler
 from sklearn.model_selection import (
-    train_test_split,                            # Divisão estratificada dos dados em conjuntos
-    RandomizedSearchCV,                          # Busca aleatória de hiperparâmetros com CV interno
-    KFold,                                       # Estratégia de validação cruzada K-fold
+    train_test_split,
+    RandomizedSearchCV,
+    KFold,
 )
 from sklearn.ensemble import (
-    RandomForestRegressor,                       # Floresta aleatória: média de N árvores de decisão
-    GradientBoostingRegressor,                   # Boosting: cada árvore corrige os erros da anterior
-    ExtraTreesRegressor,                         # Variante do RF com splits totalmente aleatórios
-    VotingRegressor,                             # Combina previsões de múltiplos modelos pela média
+    RandomForestRegressor,
+    GradientBoostingRegressor,
+    ExtraTreesRegressor,
+    VotingRegressor,
 )
 from sklearn.metrics import (
-    mean_squared_error,                          # MSE: penaliza erros grandes quadraticamente
-    mean_absolute_error,                         # MAE: média dos erros absolutos, robusto a outliers
-    r2_score,                                    # R²: proporção da variância explicada pelo modelo
+    mean_squared_error,
+    mean_absolute_error,
+    r2_score,
 )
+from sklearn.pipeline import Pipeline as _Pipe
 
-warnings.filterwarnings("ignore")               # Remove avisos desnecessários do terminal
+warnings.filterwarnings("ignore")
 
 # ─────────────────────────────────────────────
 # CONFIGURAÇÕES GLOBAIS
 # ─────────────────────────────────────────────
 
-# Caminho relativo ao script: sobe um nível (code/ -> ML/) e entra em data/
-# normpath resolve o ".." corretamente em qualquer sistema operacional
 CAMINHO_DADOS = os.path.normpath(os.path.join(
     os.path.dirname(os.path.abspath(__file__)), "..", "data", "dados_processados_1.csv"
 ))
 
-COLUNA_ALVO   = "CBR "          # Nome exato da coluna alvo no CSV (atenção ao espaço no final)
-SEED          = 42               # Semente global: garante splits, buscas e modelos reproduzíveis
-TEST_SIZE     = 0.20             # 20% do dataset reservado para teste final (nunca visto no treino)
-VAL_SIZE      = 0.15             # 15% do restante reservado para validação (separado do teste)
-N_ITER_BUSCA  = 150              # Combinações testadas por modelo na busca — mais = melhor cobertura do espaço
-CV_FOLDS      = 10               # 10-fold CV: estimativa mais estável que 5-fold em datasets menores
-META_MSE      = 0.780            # Objetivo de performance: MSE abaixo deste valor no teste final
+COLUNA_ALVO  = "CBR "
+SEED         = 42
+TEST_SIZE    = 0.20
+VAL_SIZE     = 0.15
+N_ITER_BUSCA = 150
+CV_FOLDS     = 10
+META_MSE     = 0.780
 
-# Pasta onde ensemble e scaler serão salvos (criada automaticamente se não existir)
+# ─────────────────────────────────────────────────────────────────────────────
+# CENÁRIOS DE FEATURES — Seção 2.1 da dissertação
+# ─────────────────────────────────────────────────────────────────────────────
+#
+# Mapeamento de abreviações da dissertação → nomes de coluna do CSV:
+#   IG  = 25.4mm        (pedregulho grosso)
+#   EXP = 9.5mm         (pedregulho fino / expansão granulométrica)
+#   D3  = 4.8mm         (peneira #4)
+#   D4  = 2.0mm         (peneira #10)
+#   D5  = 0.42mm        (peneira #40)
+#   D6  = 0.076mm       (peneira #200 — finos)
+#   CH  = Umidade Ótima
+#   CY  = Densidade máxima
+#   IP  = IP
+#   LL  = LL
+#
+# Subconjuntos (Seção 2.1):
+#   D1: [D6, CH, CY]            → 3 features originais
+#   D2: [D6, CH, CY, IP]        → 4 features originais
+#   D3: [D6, CH, CY, IP, LL]    → 5 features originais
+#   D4: [IG, EXP, D3, D4, D5, D6, CH, CY, IP, LL] → 10 features originais
+#
+# A feature engineering (Tabela 2) é aplicada com base nas features do cenário:
+# ratios só são geradas se AMBAS as peneiras envolvidas estiverem no cenário.
+# ─────────────────────────────────────────────────────────────────────────────
+
+CENARIO = "D4"   # ← altere para "D1", "D2", "D3" ou "D4"
+
+_ABREV = {
+    "IG":  "25.4mm",
+    "EXP": "9.5mm",
+    "D3":  "4.8mm",
+    "D4":  "2.0mm",
+    "D5":  "0.42mm",
+    "D6":  "0.076mm",
+    "CH":  "Umidade Ótima",
+    "CY":  "Densidade máxima",
+    "IP":  "IP",
+    "LL":  "LL",
+}
+
+CENARIOS = {
+    "D1": [_ABREV[k] for k in ["D6", "CH", "CY"]],
+    "D2": [_ABREV[k] for k in ["D6", "CH", "CY", "IP"]],
+    "D3": [_ABREV[k] for k in ["D6", "CH", "CY", "IP", "LL"]],
+    "D4": [_ABREV[k] for k in ["IG", "EXP", "D3", "D4", "D5", "D6", "CH", "CY", "IP", "LL"]],
+}
+
+# 10 features originais do CSV (necessárias para normalizar colunas)
+FEATURES_ORIGINAIS = [
+    "25.4mm", "9.5mm", "4.8mm", "2.0mm", "0.42mm", "0.076mm",
+    "LL", "IP", "Umidade Ótima", "Densidade máxima",
+]
+
 OUTPUT_DIR = os.path.normpath(os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "Modelo_salvo_RF"
+    os.path.dirname(os.path.abspath(__file__)), f"Modelo_salvo_RF_{CENARIO}"
 ))
-os.makedirs(OUTPUT_DIR, exist_ok=True)          # exist_ok=True evita erro se pasta já existir
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-# Pesos amostrais (opcional):
-# Quando USE_WEIGHTS=True, amostras com CBR acima de THRESHOLD recebem peso W_MINOR
-# e as demais recebem W_MAJOR, forçando o modelo a prestar mais atenção nas regiões
-# menos representadas no dataset (CBR muito alto, por exemplo)
-USE_WEIGHTS = False              # False = todas as amostras têm influência igual
-THRESHOLD   = None               # Valor de corte para separar amostras raras das comuns
-W_MINOR     = 3.0                # Peso das amostras acima do threshold (raras → mais importantes)
-W_MAJOR     = 1.0                # Peso das amostras abaixo do threshold (comuns → influência normal)
+USE_WEIGHTS = False
+THRESHOLD   = None
+W_MINOR     = 3.0
+W_MAJOR     = 1.0
+
+PALETTE = {
+    "azul":    "#2563EB",
+    "verde":   "#16A34A",
+    "laranja": "#EA580C",
+    "roxo":    "#7C3AED",
+    "fundo":   "#F8FAFC",
+    "grade":   "#E2E8F0",
+}
+
+plt.rcParams.update({
+    "figure.facecolor":  PALETTE["fundo"],
+    "axes.facecolor":    PALETTE["fundo"],
+    "axes.grid":         True,
+    "grid.color":        PALETTE["grade"],
+    "grid.linewidth":    0.8,
+    "font.family":       "DejaVu Sans",
+    "axes.spines.top":   False,
+    "axes.spines.right": False,
+})
 
 # ─────────────────────────────────────────────
 # FUNÇÕES AUXILIARES
 # ─────────────────────────────────────────────
 
-def engenharia_features(df: pd.DataFrame, coluna_alvo: str) -> pd.DataFrame:
+def normalizar_colunas(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Cria novas features derivadas das variáveis granulométricas e índices físicos.
-
-    Lógica de cada feature:
-      - ratio_X_Y: razão entre peneiras adjacentes — captura o formato da curva
-        granulométrica de forma relativa, independente dos valores absolutos
-      - atividade: LL - IP — solos com alta diferença são mais plásticos e menos resistentes
-      - compacidade: Densidade / Umidade — proxy da energia de compactação do solo
-      - finos_sq: 0.076mm² — quadrado da fração fina, amplifica diferenças em solos argilosos
-
-    Args:
-        df:           DataFrame com colunas originais.
-        coluna_alvo:  Nome da coluna alvo (preservada sem modificação).
-
-    Returns:
-        DataFrame com as colunas originais + 8 novas features derivadas.
+    Remove espaços extras nos nomes de colunas e aplica mapeamento de variações.
+    Verifica se as 10 features originais + CBR estão presentes no CSV.
     """
-    df  = df.copy()                                     # Evita modificar o DataFrame original
-    eps = 1e-6                                          # Epsilon: evita divisão por zero nas razões
+    df.columns = df.columns.str.strip()
 
-    # Razões entre peneiras consecutivas — descrevem o gradiente da curva granulométrica
-    df["ratio_9_25"]    = df["9.5mm"]   / (df["25.4mm"]  + eps)  # Fração retida entre 25.4mm e 9.5mm
-    df["ratio_4_9"]     = df["4.8mm"]   / (df["9.5mm"]   + eps)  # Fração retida entre 9.5mm e 4.8mm
-    df["ratio_2_4"]     = df["2.0mm"]   / (df["4.8mm"]   + eps)  # Fração retida entre 4.8mm e 2.0mm
-    df["ratio_042_2"]   = df["0.42mm"]  / (df["2.0mm"]   + eps)  # Fração retida entre 2.0mm e 0.42mm
-    df["ratio_076_042"] = df["0.076mm"] / (df["0.42mm"]  + eps)  # Fração retida entre 0.42mm e 0.076mm
+    mapa = {
+        "25,4mm":"25.4mm","9,5mm":"9.5mm","4,8mm":"4.8mm",
+        "2,0mm":"2.0mm","0,42mm":"0.42mm","0,076mm":"0.076mm",
+        "P25.4":"25.4mm","P9.5":"9.5mm","P4.8":"4.8mm",
+        "P2.0":"2.0mm","P0.42":"0.42mm","P0.076":"0.076mm",
+        "Ll":"LL","ll":"LL","L.L":"LL","L.L.":"LL",
+        "Limite de Liquidez":"LL",
+        "Ip":"IP","ip":"IP","I.P":"IP","I.P.":"IP",
+        "Índice de Plasticidade":"IP","Indice de Plasticidade":"IP",
+        "Wot":"Umidade Ótima","wot":"Umidade Ótima","W_ot":"Umidade Ótima",
+        "Umidade otima":"Umidade Ótima","Umidade Otima":"Umidade Ótima",
+        "Umidade ótima":"Umidade Ótima","w_ot":"Umidade Ótima",
+        "Densidade Maxima":"Densidade máxima","Densidade Máxima":"Densidade máxima",
+        "densidade máxima":"Densidade máxima","densidade maxima":"Densidade máxima",
+        "d_max":"Densidade máxima","Dmax":"Densidade máxima",
+        "γdmax":"Densidade máxima","ydmax":"Densidade máxima",
+        "CBR":"CBR ","cbr":"CBR ","Cbr":"CBR ",
+    }
+    df = df.rename(columns=mapa)
 
-    # Índice de atividade: quanto maior, mais plástico e menos resistente tende a ser o solo
-    df["atividade"]     = df["LL "] - df["IP "]
-
-    # Compacidade: solos mais densos com menor teor de umidade tendem a ter CBR maior
-    df["compacidade"]   = df["Densidade máxima "] / (df["Umidade Ótima"] + eps)
-
-    # Finos ao quadrado: amplifica a diferença entre solos com muito ou pouco material fino
-    df["finos_sq"]      = df["0.076mm"] ** 2
-
+    colunas_esperadas = FEATURES_ORIGINAIS + [COLUNA_ALVO]
+    faltando = [c for c in colunas_esperadas if c not in df.columns]
+    if faltando:
+        print("\n  AVISO: Colunas não encontradas no CSV:")
+        for c in faltando:
+            print(f"    - '{c}'")
+        print("\n  Colunas reais (após strip):")
+        for c in df.columns:
+            print(f"    - '{c}'")
+        raise SystemExit(1)
     return df
 
 
-def metricas(y_true: np.ndarray, y_pred: np.ndarray, nome: str) -> dict:
+def engenharia_features(df: pd.DataFrame, features_cenario: list) -> pd.DataFrame:
     """
-    Calcula e imprime MSE, RMSE, MAE e R² para um conjunto de previsões.
-    Emite alerta se MSE <= 1, indicando possível problema de escala ou data leakage.
+    Aplica a engenharia de features da Tabela 2 da dissertação.
+
+    Fórmulas exatas conforme Tabela 2:
+      ratio_9_25    = P9.5mm   / P25.4mm   — abertura da curva grossa
+      ratio_4_9     = P4.8mm   / P9.5mm    — transição pedregulho/areia grossa
+      ratio_2_4     = P2.0mm   / P4.8mm    — escalonamento interno médio
+      ratio_042_2   = P0.42mm  / P2.0mm    — proporção areia fina
+      ratio_076_042 = P0.076mm / P0.42mm   — limite silte/areia fina
+      atividade     = LL - LP              — (LP = LL - IP; Tabela 2)
+      compactacao   = Densidade máx / Wot — eficiência de compactação
+      finos_sq      = (P0.076mm)²         — efeito não-linear dos finos
+
+    Regra de geração condicional:
+      Cada feature derivada só é criada se todas as features-base
+      necessárias para seu cálculo estiverem no cenário selecionado.
 
     Args:
-        y_true: Valores reais do alvo.
-        y_pred: Valores previstos pelo modelo.
-        nome:   Nome do conjunto avaliado (ex: "Validacao", "Teste Final").
+        df:               DataFrame com as 10 features originais.
+        features_cenario: Lista de colunas originais do cenário ativo.
 
     Returns:
-        Dicionário com todas as métricas calculadas.
+        DataFrame com colunas do cenário + derivadas aplicáveis.
     """
-    mse  = mean_squared_error(y_true, y_pred)   # Penaliza erros grandes mais do que erros pequenos
-    rmse = np.sqrt(mse)                          # Raiz do MSE: na mesma unidade do alvo (%)
-    mae  = mean_absolute_error(y_true, y_pred)  # Média dos erros absolutos — mais intuitivo para interpretação
-    r2   = r2_score(y_true, y_pred)             # R²: 1.0 = perfeito, 0.0 = modelo constante
+    df  = df.copy()
+    eps = 1e-6
 
+    # ── Ratios granulométricas (Tabela 2) ─────────────────────────────────────
+    if {"9.5mm",  "25.4mm"}.issubset(features_cenario):
+        df["ratio_9_25"]    = df["9.5mm"]   / (df["25.4mm"]  + eps)
+
+    if {"4.8mm",  "9.5mm"}.issubset(features_cenario):
+        df["ratio_4_9"]     = df["4.8mm"]   / (df["9.5mm"]   + eps)
+
+    if {"2.0mm",  "4.8mm"}.issubset(features_cenario):
+        df["ratio_2_4"]     = df["2.0mm"]   / (df["4.8mm"]   + eps)
+
+    if {"0.42mm", "2.0mm"}.issubset(features_cenario):
+        df["ratio_042_2"]   = df["0.42mm"]  / (df["2.0mm"]   + eps)
+
+    if {"0.076mm","0.42mm"}.issubset(features_cenario):
+        df["ratio_076_042"] = df["0.076mm"] / (df["0.42mm"]  + eps)
+
+    # ── Atividade — LL - LP  (Tabela 2) ──────────────────────────────────────
+    # LP = LL - IP  →  atividade = LL - (LL - IP) = IP
+    # Calculado via LP para fidelidade à expressão da Tabela 2.
+    if {"LL", "IP"}.issubset(features_cenario):
+        LP = df["LL"] - df["IP"]             # Limite de Plasticidade
+        df["atividade"] = df["LL"] - LP      # = IP conforme Tabela 2: LL - LP
+
+    # ── Compactacao — ρdmax / Wot  (Tabela 2) ────────────────────────────────
+    if {"Densidade máxima", "Umidade Ótima"}.issubset(features_cenario):
+        df["compactacao"] = df["Densidade máxima"] / (df["Umidade Ótima"] + eps)
+
+    # ── Finos ao quadrado — (P0.076mm)²  (Tabela 2) ──────────────────────────
+    if "0.076mm" in features_cenario:
+        df["finos_sq"] = df["0.076mm"] ** 2
+
+    # Seleciona colunas do cenário + derivadas geradas (exclui features fora do cenário)
+    colunas_finais = features_cenario + [
+        c for c in df.columns
+        if c not in FEATURES_ORIGINAIS and c != COLUNA_ALVO
+    ]
+    return df[colunas_finais]
+
+
+def metricas(y_true: np.ndarray, y_pred: np.ndarray, nome: str) -> dict:
+    mse  = mean_squared_error(y_true, y_pred)
+    rmse = np.sqrt(mse)
+    mae  = mean_absolute_error(y_true, y_pred)
+    r2   = r2_score(y_true, y_pred)
     print(f"\n  [{nome}]")
     print(f"    MSE  : {mse:.4f}")
-
-    # MSE <= 1 é suspeito para CBR (que varia de ~2% a ~120%):
-    # pode indicar que o alvo foi normalizado acidentalmente ou que há data leakage
     if mse <= 1:
-        print(f"    ATENCAO: MSE={mse:.4f} <= 1 — valor suspeito. "
-              "Verifique a escala do alvo ou possivel data leakage.")
-
+        print(f"    ATENCAO: MSE={mse:.4f} <= 1 — verifique data leakage.")
     print(f"    RMSE : {rmse:.4f}")
     print(f"    MAE  : {mae:.4f}")
     print(f"    R²   : {r2:.4f}")
@@ -154,124 +267,203 @@ def metricas(y_true: np.ndarray, y_pred: np.ndarray, nome: str) -> dict:
 
 
 # ─────────────────────────────────────────────
+# FUNÇÕES DE GRÁFICO
+# ─────────────────────────────────────────────
+
+def grafico_previsto_vs_real_validacao(Y_val, pred, met):
+    fig, ax = plt.subplots(figsize=(7, 6), facecolor=PALETTE["fundo"])
+    ax.set_facecolor(PALETTE["fundo"])
+    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+    lim = [min(Y_val.min(), pred.min()) * 0.95, max(Y_val.max(), pred.max()) * 1.05]
+    ax.scatter(Y_val, pred, alpha=0.6, color=PALETTE["azul"],
+               edgecolors="white", linewidths=0.4, s=50)
+    ax.plot(lim, lim, "--", color=PALETTE["laranja"], lw=1.5, label="Ideal")
+    ax.set_xlim(lim); ax.set_ylim(lim)
+    ax.set_title(f"Previsto vs Real — Validação [{CENARIO}]", fontweight="bold")
+    ax.set_xlabel("Real"); ax.set_ylabel("Previsto"); ax.legend(framealpha=0)
+    ax.text(0.05, 0.92, f"R² = {met['r2']:.4f}", transform=ax.transAxes,
+            fontsize=10, color=PALETTE["azul"], fontweight="bold")
+    plt.tight_layout(); plt.show()
+
+
+def grafico_previsto_vs_real_teste(y_teste, pred, met):
+    fig, ax = plt.subplots(figsize=(7, 6), facecolor=PALETTE["fundo"])
+    ax.set_facecolor(PALETTE["fundo"])
+    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+    lim = [min(y_teste.min(), pred.min()) * 0.95, max(y_teste.max(), pred.max()) * 1.05]
+    ax.scatter(y_teste, pred, alpha=0.6, color=PALETTE["verde"],
+               edgecolors="white", linewidths=0.4, s=50)
+    ax.plot(lim, lim, "--", color=PALETTE["laranja"], lw=1.5, label="Ideal")
+    ax.set_xlim(lim); ax.set_ylim(lim)
+    ax.set_title(f"Previsto vs Real — Teste [{CENARIO}]", fontweight="bold")
+    ax.set_xlabel("Real"); ax.set_ylabel("Previsto"); ax.legend(framealpha=0)
+    ax.text(0.05, 0.92, f"R² = {met['r2']:.4f}", transform=ax.transAxes,
+            fontsize=10, color=PALETTE["verde"], fontweight="bold")
+    cor = PALETTE["verde"] if met["mse"] < META_MSE else PALETTE["laranja"]
+    ax.text(0.05, 0.83, f"MSE = {met['mse']:.4f}", transform=ax.transAxes,
+            fontsize=9, color=cor, fontweight="bold")
+    plt.tight_layout(); plt.show()
+
+
+def grafico_tabela_metricas(met_val, met_teste, n_features):
+    fig, ax = plt.subplots(figsize=(6, 3.5), facecolor=PALETTE["fundo"])
+    ax.axis("off")
+    td = [
+        ["Métrica", "Validação",              "Teste"],
+        ["MSE",  f"{met_val['mse']:.4f}",  f"{met_teste['mse']:.4f}"],
+        ["RMSE", f"{met_val['rmse']:.4f}", f"{met_teste['rmse']:.4f}"],
+        ["MAE",  f"{met_val['mae']:.4f}",  f"{met_teste['mae']:.4f}"],
+        ["R²",   f"{met_val['r2']:.4f}",   f"{met_teste['r2']:.4f}"],
+    ]
+    tbl = ax.table(cellText=td[1:], colLabels=td[0],
+                   cellLoc="center", loc="center", bbox=[0.05, 0.1, 0.9, 0.8])
+    tbl.auto_set_font_size(False); tbl.set_fontsize(11)
+    for (r, c), cell in tbl.get_celld().items():
+        cell.set_edgecolor(PALETTE["grade"])
+        if r == 0:
+            cell.set_facecolor(PALETTE["azul"])
+            cell.set_text_props(color="white", fontweight="bold")
+        else:
+            cell.set_facecolor("#EFF6FF" if c != 0 else "#F1F5F9")
+    ax.set_title(f"Métricas — Cenário {CENARIO} | {n_features} features",
+                 fontweight="bold", pad=14)
+    plt.tight_layout(); plt.show()
+
+
+def grafico_residuos(y_true, pred, titulo, cor):
+    fig, ax = plt.subplots(figsize=(7, 5), facecolor=PALETTE["fundo"])
+    ax.set_facecolor(PALETTE["fundo"])
+    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+    ax.scatter(pred, y_true - pred, alpha=0.6, color=cor,
+               edgecolors="white", linewidths=0.4, s=50)
+    ax.axhline(0, color=PALETTE["laranja"], lw=1.5, linestyle="--")
+    ax.set_title(titulo, fontweight="bold")
+    ax.set_xlabel("Previsto"); ax.set_ylabel("Resíduo (Real - Previsto)")
+    plt.tight_layout(); plt.show()
+
+
+def grafico_comparativo_mse(met_rf, met_gb, met_et, met_teste):
+    fig, ax = plt.subplots(figsize=(7, 5), facecolor=PALETTE["fundo"])
+    ax.set_facecolor(PALETTE["fundo"])
+    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+    nomes = ["Random\nForest", "Gradient\nBoosting", "Extra\nTrees", "Ensemble"]
+    vals  = [met_rf["mse"], met_gb["mse"], met_et["mse"], met_teste["mse"]]
+    cor_e = PALETTE["laranja"] if met_teste["mse"] >= META_MSE else "#15803D"
+    cores = [PALETTE["azul"], PALETTE["roxo"], PALETTE["verde"], cor_e]
+    bars  = ax.bar(nomes, vals, color=cores, edgecolor="white", width=0.5)
+    ax.axhline(META_MSE, color="red", lw=1.5, linestyle="--",
+               label=f"Meta MSE = {META_MSE}")
+    for bar, val in zip(bars, vals):
+        ax.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
+                f"{val:.3f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+    ax.set_title(f"MSE por Modelo — Teste [{CENARIO}]", fontweight="bold")
+    ax.set_ylabel("MSE"); ax.legend(framealpha=0)
+    plt.tight_layout(); plt.show()
+
+
+def grafico_importancia_features(rf_ot, et_ot, feature_names):
+    fig, ax = plt.subplots(figsize=(10, max(5, len(feature_names) * 0.45 + 1)),
+                           facecolor=PALETTE["fundo"])
+    ax.set_facecolor(PALETTE["fundo"])
+    ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
+    imp = (rf_ot.feature_importances_ + et_ot.feature_importances_) / 2
+    n   = len(feature_names)
+    idx = np.argsort(imp)[-n:][::-1]
+    cores = plt.cm.Blues(np.linspace(0.4, 0.9, n))[::-1]
+    ax.barh(range(n), imp[idx], color=cores, edgecolor="white")
+    ax.set_yticks(range(n))
+    ax.set_yticklabels([feature_names[i] for i in idx], fontsize=9)
+    ax.invert_yaxis()
+    ax.set_title(f"Importância das Features — Cenário {CENARIO} "
+                 f"({n} features, média RF + ET)", fontweight="bold")
+    ax.set_xlabel("Importância (Gini)")
+    ax.grid(color=PALETTE["grade"], linewidth=0.8)
+    plt.tight_layout(); plt.show()
+
+
+# ─────────────────────────────────────────────
 # 1. CARREGAMENTO E FEATURE ENGINEERING
 # ─────────────────────────────────────────────
 print("=" * 60)
-print("  RANDOM FOREST — ALTA PERFORMANCE")
+print(f"  RANDOM FOREST — CENÁRIO {CENARIO}")
 print(f"  META: MSE < {META_MSE}")
 print("=" * 60)
-print("\n[1/6] Carregando dados e aplicando feature engineering...")
 
-df = pd.read_csv(CAMINHO_DADOS)                 # Lê o CSV e armazena como DataFrame
-print(f"     Dataset original: {df.shape[0]} linhas x {df.shape[1]} colunas")
+if CENARIO not in CENARIOS:
+    print(f"ERRO: Cenário '{CENARIO}' inválido. Use D1, D2, D3 ou D4.")
+    raise SystemExit(1)
 
-# Feature engineering aplicada antes de qualquer split para que todas as
-# novas colunas estejam disponíveis em treino, validação e teste
-df_eng = engenharia_features(df, COLUNA_ALVO)
-print(f"     Dataset expandido: {df_eng.shape[0]} linhas x {df_eng.shape[1]} colunas")
-print(f"     Novas features: {df_eng.shape[1] - df.shape[1]} adicionadas")
+features_cenario = CENARIOS[CENARIO]
+print(f"\nCenário {CENARIO}: {len(features_cenario)} features originais")
+print(f"  {features_cenario}")
 
-Y = df_eng[COLUNA_ALVO].values.ravel()         # Extrai o alvo como array 1D
-X = df_eng.drop(columns=[COLUNA_ALVO])         # Remove o alvo; o restante são as features
-feature_names = X.columns.tolist()             # Guarda os nomes das features para os gráficos de importância
-X = X.values                                   # Converte para array NumPy (necessário para sklearn)
+print("\n[1/6] Carregando dados e aplicando engenharia de features (Tabela 2)...")
+
+df = pd.read_csv(CAMINHO_DADOS)
+print(f"     Dataset: {df.shape[0]} linhas x {df.shape[1]} colunas")
+
+df = normalizar_colunas(df)
+
+Y    = df[COLUNA_ALVO].values.ravel()           # Alvo preservado intacto
+X_df = engenharia_features(df, features_cenario) # Aplica Tabela 2 ao cenário
+
+feature_names = X_df.columns.tolist()
+X = X_df.values
+
+n_orig = len(features_cenario)
+n_der  = len(feature_names) - n_orig
+print(f"     Features originais no cenário : {n_orig}")
+print(f"     Features derivadas (Tabela 2) : {n_der}")
+print(f"     Total de features para treino : {len(feature_names)}")
 
 # ─────────────────────────────────────────────
-# 2. DIVISÃO DOS DADOS
+# 2. DIVISÃO E NORMALIZAÇÃO
 # ─────────────────────────────────────────────
-print("\n[2/6] Dividindo dados...")
+print("\n[2/6] Dividindo e normalizando dados...")
 
-# Primeiro split: 20% reservados para o teste final
-# Esses dados NUNCA são vistos durante a busca de hiperparâmetros nem durante o treino
 X_tv, X_teste, Y_tv, y_teste = train_test_split(
     X, Y, test_size=TEST_SIZE, random_state=SEED
 )
-
-# Segundo split: dos 80% restantes, 15% para validação
-# Usado para monitorar overfitting e comparar modelos antes de avaliar no teste
 X_treino, X_val, Y_treino, Y_val = train_test_split(
     X_tv, Y_tv, test_size=VAL_SIZE, random_state=SEED
 )
 
-# Normalização MinMax — fit APENAS no treino para evitar data leakage
-# Se o scaler fosse ajustado com todos os dados, os limites min/max
-# do teste "vazariam" para o treino, inflando artificialmente as métricas
 scaler     = MinMaxScaler()
-X_treino_n = scaler.fit_transform(X_treino)    # Aprende min/max do treino e normaliza
-X_val_n    = scaler.transform(X_val)           # Aplica a mesma escala do treino na validação
-X_teste_n  = scaler.transform(X_teste)         # Aplica a mesma escala do treino no teste
-X_tv_n     = scaler.transform(X_tv)            # Treino+validação normalizado para o retreino final
+X_treino_n = scaler.fit_transform(X_treino)     # fit apenas no treino
+X_val_n    = scaler.transform(X_val)
+X_teste_n  = scaler.transform(X_teste)
+X_tv_n     = scaler.transform(X_tv)
 
-print(f"     Treino: {X_treino_n.shape[0]}  |  Validacao: {X_val_n.shape[0]}  |  Teste: {X_teste_n.shape[0]}")
-print(f"     Features totais: {X_treino_n.shape[1]}")
+print(f"     Treino: {X_treino_n.shape[0]}  |  Val: {X_val_n.shape[0]}  |  Teste: {X_teste_n.shape[0]}")
+print(f"     Features: {X_treino_n.shape[1]}")
 
-# Pesos amostrais — opcionais, passados ao fit de cada modelo
+sample_weights = None
 if USE_WEIGHTS and THRESHOLD is not None:
-    # Amostras com CBR acima do threshold recebem peso maior (W_MINOR),
-    # forçando os modelos a reduzir o erro nessas regiões menos representadas
     sample_weights = np.where(Y_treino > THRESHOLD, W_MINOR, W_MAJOR).astype(np.float32)
     print(f"     Pesos amostrais ativos — threshold={THRESHOLD}")
-else:
-    sample_weights = None                       # None = todos os exemplos têm influência igual
 
 # ─────────────────────────────────────────────
 # 3. ESPAÇOS DE HIPERPARÂMETROS
 # ─────────────────────────────────────────────
-print("\n[3/6] Definindo espacos de hiperparametros...")
+print("\n[3/6] Definindo espaços de hiperparâmetros...")
 
-# ── Espaço do Random Forest ───────────────────────────────────────────────────
 param_rf = {
-    # Número de árvores: mais árvores = menor variância, mas diminui o retorno marginal
-    # Prefixo "rf__" é exigido pelo Pipeline para mapear ao estimador correto
     "rf__n_estimators":      list(range(100, 801, 50)),
-
-    # Profundidade máxima de cada árvore: None = cresce até a pureza total (pode overfit)
     "rf__max_depth":         list(range(3, 31, 2)) + [None],
-
-    # Mínimo de amostras para dividir um nó interno: valores maiores evitam overfitting
     "rf__min_samples_split": list(range(2, 15)),
-
-    # Mínimo de amostras em cada folha (nó terminal): controla o tamanho mínimo de cada regra
     "rf__min_samples_leaf":  list(range(1, 10)),
-
-    # Fração de features consideradas em cada divisão:
-    # "sqrt" e "log2" são heurísticas; floats permitem ajuste fino
     "rf__max_features":      ["sqrt", "log2"] + np.linspace(0.1, 1.0, 10).round(2).tolist(),
-
-    # Fração das amostras usadas para treinar cada árvore (bootstrap sampling)
-    # Valores menores aumentam a diversidade entre árvores, reduzindo correlação
     "rf__max_samples":       np.linspace(0.5, 1.0, 6).round(2).tolist(),
 }
-
-# ── Espaço do GradientBoosting ────────────────────────────────────────────────
-# Cada árvore é treinada nos resíduos da anterior (boosting sequencial)
-# Requer controle fino do learning_rate e subsample para evitar overfitting
 param_gb = {
-    # Número de árvores (rounds de boosting): mais árvores = mais correção, mas pode overfit
     "gb__n_estimators":      list(range(100, 601, 50)),
-
-    # Profundidade de cada árvore de boosting: geralmente mais rasas que no RF
     "gb__max_depth":         list(range(2, 9)),
-
-    # Taxa de aprendizado: quanto cada árvore contribui para a previsão final
-    # LR menor = mais árvores necessárias, mas geralmente melhor generalização
     "gb__learning_rate":     [0.01, 0.03, 0.05, 0.07, 0.1, 0.15, 0.2],
-
-    # Mínimo de amostras para divisão de nó e para folha (regularização)
     "gb__min_samples_split": list(range(2, 10)),
     "gb__min_samples_leaf":  list(range(1, 8)),
-
-    # Fração de amostras usadas para treinar cada árvore (sem reposição, estocástico)
-    # Valores abaixo de 1.0 introduzem estocasticidade, melhorando a generalização
     "gb__subsample":         np.linspace(0.6, 1.0, 5).round(2).tolist(),
-
-    # Fração de features candidatas em cada divisão
     "gb__max_features":      ["sqrt", "log2", None],
 }
-
-# ── Espaço do ExtraTrees ──────────────────────────────────────────────────────
-# Splits são escolhidos completamente aleatórios (ao contrário do RF que busca o melhor split)
-# Isso reduz variância e acelera o treino, ao custo de um leve aumento de viés
 param_et = {
     "et__n_estimators":      list(range(100, 601, 50)),
     "et__max_depth":         list(range(3, 31, 2)) + [None],
@@ -281,125 +473,71 @@ param_et = {
 }
 
 # ─────────────────────────────────────────────
-# 4. BUSCA DE HIPERPARÂMETROS POR MODELO
+# 4. BUSCA DE HIPERPARÂMETROS
 # ─────────────────────────────────────────────
-print(f"\n[4/6] Buscando melhores hiperparametros ({N_ITER_BUSCA} iter, {CV_FOLDS}-fold CV)...")
+print(f"\n[4/6] Buscando hiperparâmetros ({N_ITER_BUSCA} iter, {CV_FOLDS}-fold CV)...")
 
-# KFold com shuffle=True: embaralha os dados antes de criar os folds
-# Garante que cada fold seja representativo do dataset completo
 kf = KFold(n_splits=CV_FOLDS, shuffle=True, random_state=SEED)
 
-# Parâmetros extras para o fit da busca (pesos amostrais, se ativos)
-fit_params_search = {}
-if sample_weights is not None:
-    fit_params_search["sample_weight"] = sample_weights
-
-# Importação local do Pipeline para evitar conflito de namespace
-from sklearn.pipeline import Pipeline as _Pipe
-
-# ── Busca RF ──────────────────────────────────────────────────────────────────
 print("  Buscando RF...")
-
-# Pipeline com prefixo "rf": necessário para que o RandomizedSearchCV
-# mapeie os parâmetros "rf__n_estimators" ao estimador RandomForestRegressor
 pipe_rf   = _Pipe([("rf", RandomForestRegressor(random_state=SEED, n_jobs=-1))])
-search_rf = RandomizedSearchCV(
-    pipe_rf,
-    param_rf,
-    n_iter=N_ITER_BUSCA,                        # Número de combinações sorteadas do espaço
-    scoring="neg_mean_squared_error",           # Sklearn maximiza; negativo do MSE = minimiza MSE
-    cv=kf,                                      # Usa o KFold definido acima
-    random_state=SEED,                          # Reprodutibilidade das combinações sorteadas
-    n_jobs=-1,                                  # Paraleliza usando todos os núcleos da CPU
-    verbose=0,                                  # Sem saída intermediária no terminal
-)
-search_rf.fit(X_treino_n, Y_treino)            # Executa a busca no conjunto de treino
+search_rf = RandomizedSearchCV(pipe_rf, param_rf, n_iter=N_ITER_BUSCA,
+    scoring="neg_mean_squared_error", cv=kf, random_state=SEED, n_jobs=-1, verbose=0)
+search_rf.fit(X_treino_n, Y_treino)
+best_rf = {k.replace("rf__", ""): v for k, v in search_rf.best_params_.items()}
+print(f"     Melhor MSE CV (RF): {-search_rf.best_score_:.4f}")
 
-# Remove o prefixo "rf__" dos parâmetros para usar diretamente no estimador
-best_rf_params = {k.replace("rf__", ""): v for k, v in search_rf.best_params_.items()}
-print(f"     Melhor MSE CV (RF): {-search_rf.best_score_:.4f}")  # best_score_ é negativo
-
-# ── Busca GradientBoosting ────────────────────────────────────────────────────
 print("  Buscando GradientBoosting...")
 pipe_gb   = _Pipe([("gb", GradientBoostingRegressor(random_state=SEED))])
-search_gb = RandomizedSearchCV(
-    pipe_gb, param_gb, n_iter=N_ITER_BUSCA,
-    scoring="neg_mean_squared_error",
-    cv=kf, random_state=SEED, n_jobs=-1, verbose=0,
-)
+search_gb = RandomizedSearchCV(pipe_gb, param_gb, n_iter=N_ITER_BUSCA,
+    scoring="neg_mean_squared_error", cv=kf, random_state=SEED, n_jobs=-1, verbose=0)
 search_gb.fit(X_treino_n, Y_treino)
-best_gb_params = {k.replace("gb__", ""): v for k, v in search_gb.best_params_.items()}
+best_gb = {k.replace("gb__", ""): v for k, v in search_gb.best_params_.items()}
 print(f"     Melhor MSE CV (GB): {-search_gb.best_score_:.4f}")
 
-# ── Busca ExtraTrees ──────────────────────────────────────────────────────────
 print("  Buscando ExtraTrees...")
 pipe_et   = _Pipe([("et", ExtraTreesRegressor(random_state=SEED, n_jobs=-1))])
-search_et = RandomizedSearchCV(
-    pipe_et, param_et, n_iter=N_ITER_BUSCA,
-    scoring="neg_mean_squared_error",
-    cv=kf, random_state=SEED, n_jobs=-1, verbose=0,
-)
+search_et = RandomizedSearchCV(pipe_et, param_et, n_iter=N_ITER_BUSCA,
+    scoring="neg_mean_squared_error", cv=kf, random_state=SEED, n_jobs=-1, verbose=0)
 search_et.fit(X_treino_n, Y_treino)
-best_et_params = {k.replace("et__", ""): v for k, v in search_et.best_params_.items()}
+best_et = {k.replace("et__", ""): v for k, v in search_et.best_params_.items()}
 print(f"     Melhor MSE CV (ET): {-search_et.best_score_:.4f}")
 
 # ─────────────────────────────────────────────
 # 5. TREINAMENTO FINAL — ENSEMBLE
 # ─────────────────────────────────────────────
-print("\n[5/6] Treinando ensemble final...")
+print("\n[5/6] Treinando ensemble final (treino + validação)...")
 
-# Instancia cada modelo com os melhores hiperparâmetros encontrados na busca
-# **best_XX_params descompacta o dicionário como argumentos nomeados para o construtor
-rf_otimizado = RandomForestRegressor(**best_rf_params, random_state=SEED, n_jobs=-1)
-gb_otimizado = GradientBoostingRegressor(**best_gb_params, random_state=SEED)
-et_otimizado = ExtraTreesRegressor(**best_et_params,  random_state=SEED, n_jobs=-1)
+rf_ot = RandomForestRegressor(**best_rf, random_state=SEED, n_jobs=-1)
+gb_ot = GradientBoostingRegressor(**best_gb, random_state=SEED)
+et_ot = ExtraTreesRegressor(**best_et,  random_state=SEED, n_jobs=-1)
 
-# VotingRegressor: combina os 3 modelos pela média das previsões individuais
-# "Wisdom of the crowd" — erros descorrelacionados entre modelos se cancelam,
-# reduzindo a variância total sem aumentar o viés
-ensemble = VotingRegressor(estimators=[
-    ("rf", rf_otimizado),                       # Random Forest otimizado
-    ("gb", gb_otimizado),                       # GradientBoosting otimizado
-    ("et", et_otimizado),                       # ExtraTrees otimizado
-])
+ensemble = VotingRegressor(estimators=[("rf", rf_ot), ("gb", gb_ot), ("et", et_ot)])
 
-# Prepara pesos para o conjunto treino+validação (se ativos)
-fit_params_final = {}
-if sample_weights is not None:
-    # Recalcula pesos agora para o conjunto treino+validação combinado
-    sw_tv = np.where(Y_tv > THRESHOLD, W_MINOR, W_MAJOR).astype(np.float32)
-    fit_params_final["sample_weight"] = sw_tv
+fit_params = {}
+if USE_WEIGHTS and THRESHOLD is not None:
+    fit_params["sample_weight"] = np.where(Y_tv > THRESHOLD, W_MINOR, W_MAJOR).astype(np.float32)
 
-# Retreina o ensemble no conjunto treino+validação para maximizar os dados disponíveis
-# Os hiperparâmetros já foram fixados na etapa de busca — não há data leakage
-ensemble.fit(X_tv_n, Y_tv, **fit_params_final)
-print("     Ensemble treinado em treino + validacao.")
+ensemble.fit(X_tv_n, Y_tv, **fit_params)
+print("     Ensemble treinado com sucesso.")
 
 # ─────────────────────────────────────────────
 # 6. AVALIAÇÃO
 # ─────────────────────────────────────────────
 print("\n[6/6] Avaliando modelos...")
 
-# Previsões do ensemble nos dois conjuntos de interesse
-pred_val_ens   = ensemble.predict(X_val_n)      # Previsão no conjunto de validação
-pred_teste_ens = ensemble.predict(X_teste_n)    # Previsão no conjunto de teste (avaliação final)
+pred_val   = ensemble.predict(X_val_n)
+pred_teste = ensemble.predict(X_teste_n)
 
-# Métricas do ensemble
-met_val   = metricas(Y_val,   pred_val_ens,   "Validacao  — Ensemble")
-met_teste = metricas(y_teste, pred_teste_ens, "Teste Final — Ensemble")
+met_val   = metricas(Y_val,   pred_val,   f"Validação  — Ensemble [{CENARIO}]")
+met_teste = metricas(y_teste, pred_teste, f"Teste Final — Ensemble [{CENARIO}]")
 
-# Retreina os modelos individuais no conjunto completo (treino+val) para
-# comparação justa com o ensemble no conjunto de teste
 print("\n  --- Modelos Individuais (Teste) ---")
-rf_otimizado.fit(X_tv_n, Y_tv)                 # RF individual retreinado
-gb_otimizado.fit(X_tv_n, Y_tv)                 # GB individual retreinado
-et_otimizado.fit(X_tv_n, Y_tv)                 # ET individual retreinado
+rf_ot.fit(X_tv_n, Y_tv); gb_ot.fit(X_tv_n, Y_tv); et_ot.fit(X_tv_n, Y_tv)
+met_rf = metricas(y_teste, rf_ot.predict(X_teste_n), "Random Forest")
+met_gb = metricas(y_teste, gb_ot.predict(X_teste_n), "GradientBoosting")
+met_et = metricas(y_teste, et_ot.predict(X_teste_n), "ExtraTrees")
 
-met_rf = metricas(y_teste, rf_otimizado.predict(X_teste_n), "Random Forest")
-met_gb = metricas(y_teste, gb_otimizado.predict(X_teste_n), "GradientBoosting")
-met_et = metricas(y_teste, et_otimizado.predict(X_teste_n), "ExtraTrees")
-
-# Verifica se o MSE do ensemble atingiu a meta definida nas configurações
 print("\n" + "=" * 60)
 if met_teste["mse"] < META_MSE:
     print(f"  META ATINGIDA! MSE = {met_teste['mse']:.4f} < {META_MSE}")
@@ -410,183 +548,34 @@ print("=" * 60)
 # ─────────────────────────────────────────────
 # VISUALIZAÇÕES
 # ─────────────────────────────────────────────
-
-# Paleta de cores padronizada — idêntica ao script MLP para consistência visual
-PALETTE = {
-    "azul":    "#2563EB",   # Conjunto de validação
-    "verde":   "#16A34A",   # Conjunto de teste
-    "laranja": "#EA580C",   # Linha de referência e destaques
-    "roxo":    "#7C3AED",   # GradientBoosting no gráfico de barras
-    "fundo":   "#F8FAFC",   # Cor de fundo dos gráficos
-    "grade":   "#E2E8F0",   # Linhas de grade
-}
-
-# Aplica estilo global a todos os gráficos criados a partir daqui
-plt.rcParams.update({
-    "figure.facecolor":  PALETTE["fundo"],   # Fundo da figura completa
-    "axes.facecolor":    PALETTE["fundo"],   # Fundo de cada eixo individual
-    "axes.grid":         True,               # Ativa grade em todos os eixos
-    "grid.color":        PALETTE["grade"],   # Cor das linhas de grade
-    "grid.linewidth":    0.8,                # Espessura das linhas de grade
-    "font.family":       "DejaVu Sans",      # Fonte padrão
-    "axes.spines.top":   False,              # Remove borda superior (visual mais limpo)
-    "axes.spines.right": False,              # Remove borda direita
-})
-
-# ── Figura 1: Painel principal 2x3 ───────────────────────────────────────────
-fig = plt.figure(figsize=(18, 14))
-fig.suptitle("Ensemble RF+GB+ET — Analise de Performance", fontsize=16, fontweight="bold", y=0.98)
-gs = gridspec.GridSpec(2, 3, figure=fig, hspace=0.42, wspace=0.35)  # 2 linhas, 3 colunas
-
-# A) Previsto vs Real — Validação
-# Pontos próximos da diagonal laranja indicam previsões precisas
-ax1 = fig.add_subplot(gs[0, 0])
-lim = [min(Y_val.min(), pred_val_ens.min()) * 0.95,       # Limite inferior com margem de 5%
-       max(Y_val.max(), pred_val_ens.max()) * 1.05]        # Limite superior com margem de 5%
-ax1.scatter(Y_val, pred_val_ens, alpha=0.6, color=PALETTE["azul"],
-            edgecolors="white", linewidths=0.4, s=50)
-ax1.plot(lim, lim, "--", color=PALETTE["laranja"], lw=1.5, label="Ideal")  # Linha y=x (previsão perfeita)
-ax1.set_xlim(lim); ax1.set_ylim(lim)
-ax1.set_title("Previsto vs Real — Validacao", fontweight="bold")
-ax1.set_xlabel("Real"); ax1.set_ylabel("Previsto")
-ax1.legend(framealpha=0)
-ax1.text(0.05, 0.92, f"R² = {met_val['r2']:.4f}", transform=ax1.transAxes,
-         fontsize=10, color=PALETTE["azul"], fontweight="bold")
-
-# B) Previsto vs Real — Teste
-# Avaliação final: mede a capacidade de generalização para dados nunca vistos
-ax2 = fig.add_subplot(gs[0, 1])
-lim2 = [min(y_teste.min(), pred_teste_ens.min()) * 0.95,
-        max(y_teste.max(), pred_teste_ens.max()) * 1.05]
-ax2.scatter(y_teste, pred_teste_ens, alpha=0.6, color=PALETTE["verde"],
-            edgecolors="white", linewidths=0.4, s=50)
-ax2.plot(lim2, lim2, "--", color=PALETTE["laranja"], lw=1.5, label="Ideal")
-ax2.set_xlim(lim2); ax2.set_ylim(lim2)
-ax2.set_title("Previsto vs Real — Teste", fontweight="bold")
-ax2.set_xlabel("Real"); ax2.set_ylabel("Previsto")
-ax2.legend(framealpha=0)
-ax2.text(0.05, 0.92, f"R² = {met_teste['r2']:.4f}", transform=ax2.transAxes,
-         fontsize=10, color=PALETTE["verde"], fontweight="bold")
-
-# Exibe o MSE final em verde se a meta foi atingida, laranja caso contrário
-cor_meta = PALETTE["verde"] if met_teste["mse"] < META_MSE else PALETTE["laranja"]
-ax2.text(0.05, 0.83, f"MSE = {met_teste['mse']:.4f}", transform=ax2.transAxes,
-         fontsize=9, color=cor_meta, fontweight="bold")
-
-# C) Tabela comparativa de métricas — resumo visual lado a lado
-ax3 = fig.add_subplot(gs[0, 2])
-ax3.axis("off")                                # Esconde os eixos; apenas a tabela será exibida
-table_data = [
-    ["Metrica", "Validacao", "Teste"],
-    ["MSE",  f"{met_val['mse']:.4f}",  f"{met_teste['mse']:.4f}"],
-    ["RMSE", f"{met_val['rmse']:.4f}", f"{met_teste['rmse']:.4f}"],
-    ["MAE",  f"{met_val['mae']:.4f}",  f"{met_teste['mae']:.4f}"],
-    ["R²",   f"{met_val['r2']:.4f}",   f"{met_teste['r2']:.4f}"],
-]
-tbl = ax3.table(cellText=table_data[1:], colLabels=table_data[0],
-                cellLoc="center", loc="center", bbox=[0.05, 0.25, 0.9, 0.55])
-tbl.auto_set_font_size(False)
-tbl.set_fontsize(11)
-for (r, c), cell in tbl.get_celld().items():
-    cell.set_edgecolor(PALETTE["grade"])
-    if r == 0:                                 # Cabeçalho: fundo azul, texto branco
-        cell.set_facecolor(PALETTE["azul"])
-        cell.set_text_props(color="white", fontweight="bold")
-    else:                                      # Dados: fundo azul claro nas colunas numéricas
-        cell.set_facecolor("#EFF6FF" if c != 0 else "#F1F5F9")
-ax3.set_title("Comparativo de Metricas — Ensemble", fontweight="bold", pad=14)
-
-# D) Resíduos — Validação
-# Resíduo = Real - Previsto; distribuição em torno de 0 indica modelo sem viés
-ax4 = fig.add_subplot(gs[1, 0])
-residuos_val = Y_val - pred_val_ens            # Calcula os resíduos do conjunto de validação
-ax4.scatter(pred_val_ens, residuos_val, alpha=0.6, color=PALETTE["azul"],
-            edgecolors="white", linewidths=0.4, s=50)
-ax4.axhline(0, color=PALETTE["laranja"], lw=1.5, linestyle="--")  # Linha de resíduo zero (ideal)
-ax4.set_title("Residuos — Validacao", fontweight="bold")
-ax4.set_xlabel("Previsto"); ax4.set_ylabel("Residuo (Real - Previsto)")
-
-# E) Resíduos — Teste
-# Padrões sistemáticos (funil, curva) indicam viés ou falta de ajuste do modelo
-ax5 = fig.add_subplot(gs[1, 1])
-residuos_teste = y_teste - pred_teste_ens      # Calcula os resíduos do conjunto de teste
-ax5.scatter(pred_teste_ens, residuos_teste, alpha=0.6, color=PALETTE["verde"],
-            edgecolors="white", linewidths=0.4, s=50)
-ax5.axhline(0, color=PALETTE["laranja"], lw=1.5, linestyle="--")
-ax5.set_title("Residuos — Teste", fontweight="bold")
-ax5.set_xlabel("Previsto"); ax5.set_ylabel("Residuo (Real - Previsto)")
-
-# F) Comparativo de MSE — modelos individuais vs ensemble
-# Permite visualizar o ganho do ensemble sobre cada modelo sozinho
-ax6 = fig.add_subplot(gs[1, 2])
-nomes_mod   = ["Random\nForest", "Gradient\nBoosting", "Extra\nTrees", "Ensemble"]
-mse_valores = [met_rf["mse"], met_gb["mse"], met_et["mse"], met_teste["mse"]]
-
-# Ensemble fica verde escuro se meta atingida, laranja se não atingida
-cores_bar = [
-    PALETTE["azul"],                           # Random Forest
-    PALETTE["roxo"],                           # GradientBoosting
-    PALETTE["verde"],                          # ExtraTrees
-    PALETTE["laranja"] if met_teste["mse"] >= META_MSE else "#15803D",  # Ensemble
-]
-bars = ax6.bar(nomes_mod, mse_valores, color=cores_bar, edgecolor="white", width=0.5)
-ax6.axhline(META_MSE, color="red", lw=1.5, linestyle="--", label=f"Meta MSE={META_MSE}")
-
-# Anota o valor de MSE em cima de cada barra
-for bar, val in zip(bars, mse_valores):
-    ax6.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
-             f"{val:.3f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
-
-ax6.set_title("MSE por Modelo — Teste Final", fontweight="bold")
-ax6.set_ylabel("MSE")
-ax6.legend(framealpha=0)
-
-plt.tight_layout(rect=[0, 0, 1, 0.97])
-
-# ── Figura 2: Importância de features ────────────────────────────────────────
-# Média da importância Gini entre RF e ET (ambos têm feature_importances_)
-# GradientBoosting também possui, mas RF e ET já representam bem os dois estilos
-fig2, ax7 = plt.subplots(figsize=(12, 6), facecolor=PALETTE["fundo"])
-ax7.set_facecolor(PALETTE["fundo"])
-ax7.spines["top"].set_visible(False)
-ax7.spines["right"].set_visible(False)
-
-# Média das importâncias entre RF e ET: suaviza vieses individuais de cada modelo
-importancias_media = (rf_otimizado.feature_importances_ + et_otimizado.feature_importances_) / 2
-
-top_n = min(15, len(feature_names))            # Exibe no máximo 15 features (ou todas, se menos)
-idx   = np.argsort(importancias_media)[-top_n:][::-1]  # Índices das top N features em ordem decrescente
-
-# Gradiente de azul: mais escuro = mais importante
-cores = plt.cm.Blues(np.linspace(0.4, 0.9, top_n))[::-1]
-
-ax7.barh(range(top_n), importancias_media[idx], color=cores, edgecolor="white")
-ax7.set_yticks(range(top_n))
-ax7.set_yticklabels([feature_names[i] for i in idx], fontsize=9)
-ax7.invert_yaxis()                             # Coloca a mais importante no topo
-ax7.set_title(f"Top {top_n} Features Mais Importantes (media RF+ET)", fontweight="bold")
-ax7.set_xlabel("Importancia (Gini)")           # Gini: quanto cada feature reduz a impureza média
-ax7.grid(color=PALETTE["grade"], linewidth=0.8)
-plt.tight_layout()
-
-plt.show()                                     # Exibe todas as figuras na tela
+print("\n--- Gerando Gráficos ---")
+grafico_previsto_vs_real_validacao(Y_val, pred_val, met_val)
+grafico_previsto_vs_real_teste(y_teste, pred_teste, met_teste)
+grafico_tabela_metricas(met_val, met_teste, len(feature_names))
+grafico_residuos(Y_val,   pred_val,   f"Resíduos — Validação [{CENARIO}]", PALETTE["azul"])
+grafico_residuos(y_teste, pred_teste, f"Resíduos — Teste [{CENARIO}]",     PALETTE["verde"])
+grafico_comparativo_mse(met_rf, met_gb, met_et, met_teste)
+grafico_importancia_features(rf_ot, et_ot, feature_names)
 
 # ─────────────────────────────────────────────
 # SALVAMENTO
 # ─────────────────────────────────────────────
-
-# Salva o ensemble completo (com os 3 modelos internos e seus pesos)
-# O arquivo .joblib é mais eficiente que pickle para objetos NumPy/sklearn
 dump(ensemble, os.path.join(OUTPUT_DIR, "rf_modelo_final.joblib"))
-
-# Salva o scaler para garantir que novos dados sejam normalizados
-# com exatamente os mesmos limites usados no treinamento
 dump(scaler,   os.path.join(OUTPUT_DIR, "scaler.joblib"))
 
-print(f"\n  Ensemble salvo -> rf_modelo_final.joblib")
-print(f"  Scaler  salvo  -> scaler.joblib")
-print(f"  Pasta          -> {OUTPUT_DIR}")
+# metadados.json — lido pelo PREVISAO.py para replicar a engenharia corretamente
+metadados = {
+    "cenario":          CENARIO,
+    "features_cenario": features_cenario,   # features originais do cenário
+    "feature_names":    feature_names,      # originais + derivadas (ordem do scaler)
+}
+with open(os.path.join(OUTPUT_DIR, "metadados.json"), "w", encoding="utf-8") as f:
+    json.dump(metadados, f, ensure_ascii=False, indent=2)
 
+print(f"\n  Ensemble salvo  -> rf_modelo_final.joblib")
+print(f"  Scaler  salvo   -> scaler.joblib")
+print(f"  Metadados       -> metadados.json")
+print(f"  Pasta           -> {OUTPUT_DIR}")
 print("\n" + "=" * 60)
-print("  Processo concluido com sucesso!")
+print(f"  Concluído — Cenário {CENARIO}")
 print("=" * 60)
