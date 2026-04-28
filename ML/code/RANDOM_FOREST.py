@@ -54,6 +54,37 @@ CAMINHO_DADOS = os.path.normpath(os.path.join(
 ))
 
 COLUNA_ALVO   = "CBR "          # Nome exato da coluna alvo no CSV (atenção ao espaço no final)
+
+# Mapeamento das 10 features utilizadas (notação dissertação → coluna do CSV):
+#   IG  → 25.4mm  |  EXP → 9.5mm   |  D3 → 4.8mm   |  D4 → 2.0mm
+#   D5  → 0.42mm  |  D6  → 0.076mm |  LL → LL       |  IP → IP
+#   CH  → Umidade Ótima             |  CY → Densidade máxima
+FEATURES = [
+    "25.4mm",        # IG  — pedregulho grosso
+    "9.5mm",         # EXP — pedregulho médio/fino
+    "4.8mm",         # D3  — peneira nº4 (pedregulho/areia)
+    "2.0mm",         # D4  — peneira nº10 (areia grossa)
+    "0.42mm",        # D5  — peneira nº40 (areia fina)
+    "0.076mm",       # D6  — peneira nº200 (silte/argila)
+    "LL",            # LL  — limite de liquidez
+    "IP",            # IP  — índice de plasticidade
+    "Umidade Ótima", # CH  — umidade ótima de compactação (Proctor)
+    "Densidade máxima", # CY — densidade seca máxima (Proctor)
+]
+
+# Rótulos exibidos no gráfico de importância: "coluna (notação)"
+FEATURES_LABELS = [
+    "25.4mm (IG)",
+    "9.5mm (EXP)",
+    "4.8mm (D3)",
+    "2.0mm (D4)",
+    "0.42mm (D5)",
+    "0.076mm (D6)",
+    "LL",
+    "IP",
+    "Umidade Ótima (CH)",
+    "Densidade máxima (CY)",
+]
 SEED          = 42               # Semente global: garante splits, buscas e modelos reproduzíveis
 TEST_SIZE     = 0.20             # 20% do dataset reservado para teste final (nunca visto no treino)
 VAL_SIZE      = 0.15             # 15% do restante reservado para validação (separado do teste)
@@ -149,10 +180,10 @@ def engenharia_features(df: pd.DataFrame, coluna_alvo: str) -> pd.DataFrame:
     df["ratio_076_042"] = df["0.076mm"] / (df["0.42mm"]  + eps)
 
     # Índice de atividade: quanto maior, mais plástico e menos resistente é o solo
-    df["atividade"]     = df["LL "] - df["IP "]
+    df["atividade"]     = df["LL"] - df["IP"]
 
     # Compacidade: solos mais densos com menor umidade tendem a ter CBR maior
-    df["compacidade"]   = df["Densidade máxima "] / (df["Umidade Ótima"] + eps)
+    df["compacidade"]   = df["Densidade máxima"] / (df["Umidade Ótima"] + eps)
 
     # Finos ao quadrado: amplifica a diferença entre solos com muito ou pouco material fino
     df["finos_sq"]      = df["0.076mm"] ** 2
@@ -424,7 +455,7 @@ def grafico_importancia_features(rf_otimizado: RandomForestRegressor,
         rf_otimizado.feature_importances_ + et_otimizado.feature_importances_
     ) / 2
 
-    top_n = min(15, len(feature_names))
+    top_n = len(feature_names)          # mostra todas as features, sem limite fixo
     idx = np.argsort(importancias_media)[-top_n:][::-1]
 
     # Gradiente de azul: mais escuro = mais importante
@@ -432,10 +463,10 @@ def grafico_importancia_features(rf_otimizado: RandomForestRegressor,
 
     ax.barh(range(top_n), importancias_media[idx], color=cores, edgecolor="white")
     ax.set_yticks(range(top_n))
-    ax.set_yticklabels([feature_names[i] for i in idx], fontsize=9)
+    ax.set_yticklabels([FEATURES_LABELS[i] for i in idx], fontsize=9)
     ax.invert_yaxis()                            # Feature mais importante no topo
 
-    ax.set_title(f"Top {top_n} Features Mais Importantes (média RF + ET)", fontweight="bold")
+    ax.set_title(f"Importância das {top_n} Features (média RF + ET)", fontweight="bold")
     ax.set_xlabel("Importância (Gini)")
     ax.grid(color=PALETTE["grade"], linewidth=0.8)
 
@@ -444,25 +475,41 @@ def grafico_importancia_features(rf_otimizado: RandomForestRegressor,
 
 
 # ─────────────────────────────────────────────
-# 1. CARREGAMENTO E ENGENHARIA DE FEATURES
+# 1. CARREGAMENTO
 # ─────────────────────────────────────────────
 print("=" * 60)
 print("  RANDOM FOREST — ALTA PERFORMANCE")
 print(f"  META: MSE < {META_MSE}")
 print("=" * 60)
-print("\n[1/6] Loading data and applying feature engineering...")
+print("\n[1/6] Carregando dados...")
 
 df = pd.read_csv(CAMINHO_DADOS)
-print(f"     Dataset original: {df.shape[0]} linhas x {df.shape[1]} colunas")
+print(f"     Dataset: {df.shape[0]} linhas x {df.shape[1]} colunas brutas")
 
-df_eng = engenharia_features(df, COLUNA_ALVO)
-print(f"     Dataset expandido: {df_eng.shape[0]} linhas x {df_eng.shape[1]} colunas")
-print(f"     Novas features: {df_eng.shape[1] - df.shape[1]} adicionadas")
+# Remove espaços nos nomes das colunas (causa mais comum de KeyError no CSV)
+df.columns = df.columns.str.strip()
 
-Y = df_eng[COLUNA_ALVO].values.ravel()
-X = df_eng.drop(columns=[COLUNA_ALVO])
-feature_names = X.columns.tolist()
-X = X.values
+# Renomeia variações conhecidas para os nomes padrão usados em FEATURES
+_mapa_colunas = {
+    "Ll": "LL", "ll": "LL", "L.L": "LL",
+    "Ip": "IP", "ip": "IP", "I.P": "IP",
+    "Densidade Maxima": "Densidade máxima",
+    "Densidade Máxima": "Densidade máxima",
+    "densidade maxima": "Densidade máxima",
+    "d_max": "Densidade máxima", "Dmax": "Densidade máxima",
+    "Wot": "Umidade Ótima", "wot": "Umidade Ótima",
+    "Umidade otima": "Umidade Ótima", "Umidade Otima": "Umidade Ótima",
+    "CBR": "CBR ", "cbr": "CBR ", "Cbr": "CBR ",
+}
+df = df.rename(columns=_mapa_colunas)
+
+# Seleciona apenas as 10 features definidas em FEATURES — sem engenharia de features
+df = df[FEATURES + [COLUNA_ALVO]]
+
+Y            = df[COLUNA_ALVO].values.ravel()   # Alvo: array 1D (CBR %)
+X            = df[FEATURES].values              # Matriz numérica: 10 colunas
+feature_names = FEATURES                        # Nomes para o gráfico de importância
+print(f"     Features utilizadas: {len(FEATURES)} — {FEATURES}")
 
 # Armazena Y original para calcular métricas na escala real do CBR após a previsão
 Y_orig = Y.copy()
