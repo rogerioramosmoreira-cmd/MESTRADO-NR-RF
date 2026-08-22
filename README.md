@@ -1,5 +1,6 @@
 # Previsão de CBR por Machine Learning
 
+<<<<<<< HEAD
 Dissertação de Mestrado — PUC Goiás
 
 Pipeline de Machine Learning para previsão do **CBR (California Bearing Ratio)** de solos a partir de variáveis granulométricas, de plasticidade e de compactação Proctor. Inclui modelos de Árvore Aleatória (Random Forest) e Rede Neural (MLP), comparação entre conjuntos de variáveis, e dashboard interativo em Streamlit.
@@ -134,12 +135,92 @@ mll/
     └── explore/
         └── inspect_data.py              # Limpeza manual antiga — fora do menu,
                                          # substituída por prepare/build_dataset.py
+=======
+Dissertação de Mestrado — PUC Goiás 2025
+
+Pipeline de Machine Learning para previsão do **CBR (California Bearing Ratio)** de solos a partir de variáveis granulométricas e de compactação Proctor. Inclui modelos de Random Forest e Rede Neural MLP, com dashboard interativo em Streamlit.
+
+---
+
+## Visão Geral
+
+| Componente | Descrição |
+|---|---|
+| Alvo | CBR (%) — suporte de solo para pavimentação |
+| Meta de desempenho | MSE < 0,780 no conjunto de teste |
+| Modelos | Random Forest (PT e EN), RF por Quintis D1–D5, MLP |
+| Interface | Menu CLI (`main.py`) + Dashboard Streamlit |
+
+---
+
+## Variáveis de Entrada
+
+| Variável | Significado |
+|---|---|
+| 25.4mm (IG) | Pedregulho grosso |
+| 9.5mm (EXP) | Pedregulho médio/fino |
+| 4.8mm (D3) | Peneira nº 4 — limite areia/pedregulho |
+| 2.0mm (D4) | Peneira nº 10 — areia grossa |
+| 0.42mm (D5) | Peneira nº 40 — areia fina |
+| 0.076mm (D6) | Peneira nº 200 — silte/argila |
+| LL | Limite de Liquidez |
+| IP | Índice de Plasticidade |
+| Umidade Ótima | Umidade ótima Proctor |
+| Densidade máxima | Massa específica seca máxima Proctor |
+
+---
+
+## Estrutura do Projeto
+
+```
+ML/
+├── data/
+│   ├── raw/                        # Dados brutos originais
+│   └── processed/
+│       └── dados_processados_1.csv # Dataset de entrada do pipeline
+├── models/
+│   ├── rf/                         # Modelo RF (Português)
+│   ├── rf_en/                      # Modelo RF (English)
+│   ├── rf_quintis/                 # Modelos RF por quintis
+│   └── mlp/                        # Rede Neural MLP
+├── src/
+│   ├── main.py                     # Ponto de entrada — menu interativo
+│   ├── RANDOM_FOREST.py            # RF padrão (Português)
+│   ├── RANDOM_FOREST_EN.py         # RF padrão (English) — alto desempenho
+│   ├── RANDOM_FLOREST_Dn.py        # RF por quintis D1–D5 (simples)
+│   ├── RANDOM_FLOREST_Separado.py  # RF por quintis D1–D5 (completo + combos)
+│   ├── MLL.py                      # Rede Neural MLP (TensorFlow/Keras)
+│   ├── dashboard.py                # Dashboard Streamlit
+│   ├── PREVISAO.py                 # Previsão com modelo MLP salvo
+│   ├── PREVISAO_RF.py              # Previsão com modelo RF salvo
+│   └── LEITURA.py                  # Leitura e inspeção de dados
+└── docs/
+    ├── ANALISE_COMPLETA_ARQUIVOS.md
+    └── DOCUMENTACAO_COMPLETA_ML.docx
+```
+
+---
+
+## Instalação
+
+**Pré-requisito:** Python 3.13+
+
+```bash
+# Criar e ativar ambiente virtual
+python -m venv ML
+ML\Scripts\activate          # Windows
+# source ML/bin/activate     # Linux/macOS
+
+# Instalar dependências
+pip install -r requirements.txt
+>>>>>>> 5be1326de65eba6a8127ed3262a0b20ebf5729b0
 ```
 
 ---
 
 ## Uso
 
+<<<<<<< HEAD
 ### Menu interativo
 
 ```bash
@@ -374,11 +455,33 @@ Qualquer exceção não tratada é enfileirada por `console.guard()` em um paine
   ser citados como se fossem.
 - Nomes de arquivos, pastas e identificadores em inglês, `snake_case`.
 - Rótulos de eixo, legendas e saída de terminal em português.
+=======
+### Menu CLI (todos os modelos)
+
+```bash
+cd ML/src
+python main.py
+```
+
+Opções disponíveis:
+- **Modo Separado** — executa um modelo por vez
+- **Modo Juntos** — executa grupo de modelos em sequência
+
+### Dashboard Streamlit
+
+```bash
+cd ML/src
+streamlit run dashboard.py
+```
+
+Acesso em `http://localhost:8501` — visualização de métricas, previsão interativa e gráficos de desempenho.
+>>>>>>> 5be1326de65eba6a8127ed3262a0b20ebf5729b0
 
 ---
 
 ## Modelos
 
+<<<<<<< HEAD
 ### Árvore Aleatória — padrão (`random_forest.py`, `random_forest_en.py`)
 Busca aleatória de hiperparâmetros, log-transform no alvo (`log1p`/`expm1`), pesos amostrais para CBR alto, retreino em treino + validação. Gráficos de curva de busca, convergência OOB e importância de features.
 
@@ -399,10 +502,46 @@ MLP 128 → 64 → 32 → 16 → 1, com BatchNorm, LeakyReLU e dropout decrescen
 
 ### Comparação C1–C5 (`subsets_rf.py`, `subsets_mlp.py`, `subsets_comparison.py`)
 Os dois algoritmos acima, treinados uma vez por conjunto de variáveis, com a mesma semente de divisão. Resultados salvos em `models/subsets/<modelo>/results.json` e `predictions.npz`, para que a comparação possa ser refeita sem retreinar.
+=======
+### Random Forest (RANDOM_FOREST_EN.py)
+- Busca aleatória: 150 iterações, 10-fold CV
+- Log-transform no alvo (`log1p` / `expm1`)
+- Sample weights para amostras raras (CBR > 25%)
+- Retreino em treino + validação após tuning
+- Gráficos: curva de aprendizado, convergência OOB, importância de features
+
+### Random Forest por Quintis (RANDOM_FLOREST_Dn.py / Separado)
+- 5 modelos independentes por faixas de CBR (D1–D5)
+- Versão completa inclui combinações entre quintis
+
+### MLP — Rede Neural (MLL.py)
+- Implementado com TensorFlow/Keras
+- Entrada: 10 features normalizadas
+
+---
+
+## Dependências Principais
+
+| Biblioteca | Versão |
+|---|---|
+| scikit-learn | 1.7.2 |
+| TensorFlow / Keras | 2.20.0 / 3.12.0 |
+| numpy | 2.2.6 |
+| pandas | 2.3.3 |
+| matplotlib | 3.10.7 |
+| seaborn | 0.13.2 |
+| streamlit | — |
+| joblib | 1.5.2 |
+>>>>>>> 5be1326de65eba6a8127ed3262a0b20ebf5729b0
 
 ---
 
 ## Referência
 
+<<<<<<< HEAD
 > Dissertação de Mestrado — Previsão de CBR por Machine Learning
 > PUC Goiás
+=======
+> Dissertação de Mestrado — Previsão de CBR por Machine Learning  
+> PUC Goiás, 2025
+>>>>>>> 5be1326de65eba6a8127ed3262a0b20ebf5729b0
