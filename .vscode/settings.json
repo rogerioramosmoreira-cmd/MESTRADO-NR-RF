@@ -1,3 +1,8 @@
 {
-    "python.defaultInterpreterPath": "R:\\Arquivos\\Codigos\\MLL\\ML\\ML\\Scripts\\python.exe"
+    "python.defaultInterpreterPath": "${workspaceFolder}/.venv/Scripts/python.exe",
+    "python.analysis.extraPaths": [
+        "${workspaceFolder}/src"
+    ],
+    "python.terminal.activateEnvironment": true,
+    "files.encoding": "utf8"
 }

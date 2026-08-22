@@ -1,0 +1,27 @@
+# Ambiente virtual do projeto
+.venv/
+venv/
+ML/
+env/
+
+# Artefatos de execução do Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Figuras geradas pelos modelos — reproduzíveis a partir do código.
+# Remova esta linha se a dissertação exigir versionar as figuras.
+reports/figures/
+
+# Documentos grandes
+docs/DOCUMENTACAO_COMPLETA_ML.docx
+
+# Editores e sistema operacional
+.idea/
+*.swp
+Thumbs.db
+.DS_Store
+
+# Saída do modo rápido (MLL_FAST=1) — descartável
+models_rapido/
+reports/figures_rapido/

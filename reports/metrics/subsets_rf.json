@@ -1,0 +1,12 @@
+{
+  "key": "subsets_rf",
+  "label": "Conjuntos C1–C5 — Árvore Aleatória",
+  "split": "teste",
+  "recorded_at": "2026-08-22T19:23:52",
+  "r2": 0.8388141117418838,
+  "mae": 4.865378732178365,
+  "rmse": 8.279380253002532,
+  "mse": 68.54813737380827,
+  "mape": 23.501073879708457,
+  "conjunto": "C5 — Todos"
+}

@@ -1,0 +1,84 @@
+{
+    // Configurações de execução do VS Code.
+    //
+    // "console": "integratedTerminal" é obrigatório em todas elas: o Debug
+    // Console do VS Code não é um terminal de verdade, então o menu não
+    // conseguiria ler o `input()` e a barra de progresso cairia no modo de
+    // marcos. O terminal integrado se comporta como um console normal.
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Menu principal",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true,
+            "env": {
+                "PYTHONIOENCODING": "utf-8",
+                "PYTHONUTF8": "1"
+            }
+        },
+        {
+            "name": "Menu principal — modo rápido",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true,
+            "env": {
+                "PYTHONIOENCODING": "utf-8",
+                "PYTHONUTF8": "1",
+                // Busca reduzida; grava em models_rapido/ e figures_rapido/,
+                // sem tocar nos resultados da execução completa.
+                "MLL_FAST": "1"
+            }
+        },
+        {
+            "name": "Modelo atual (arquivo aberto)",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${file}",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true,
+            "env": {
+                "PYTHONIOENCODING": "utf-8",
+                "PYTHONUTF8": "1",
+                // Não abre janelas de gráfico: as figuras são salvas em
+                // reports/figures/ de qualquer forma.
+                "MLL_SHOW": "0"
+            }
+        },
+        {
+            "name": "Só verificar bibliotecas",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/src/main.py",
+            "args": ["--check"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true,
+            "env": {
+                "PYTHONIOENCODING": "utf-8",
+                "PYTHONUTF8": "1"
+            }
+        },
+        {
+            "name": "Dashboard (Streamlit)",
+            "type": "debugpy",
+            "request": "launch",
+            "module": "streamlit",
+            "args": ["run", "${workspaceFolder}/src/dashboard.py"],
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true,
+            "env": {
+                "PYTHONIOENCODING": "utf-8",
+                "PYTHONUTF8": "1"
+            }
+        }
+    ]
+}

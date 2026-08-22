@@ -1,0 +1,183 @@
+{
+  "model": "mlp",
+  "subsets": {
+    "c1": {
+      "name": "C1 — Granulometria",
+      "description": "Seis peneiras da curva granulométrica",
+      "n_features": 6,
+      "features": [
+        "25.4mm",
+        "9.5mm",
+        "4.8mm",
+        "2.0mm",
+        "0.42mm",
+        "0.076mm"
+      ],
+      "validation": {
+        "name": "C1 — Granulometria",
+        "mse": 8736.007226900707,
+        "rmse": 93.46661022472522,
+        "mae": 16.37118536217268,
+        "mape": 95.58486254732964,
+        "r2": -21.147981288119844
+      },
+      "test": {
+        "name": "C1 — Granulometria",
+        "mse": 5577.0810315687895,
+        "rmse": 74.67985693323729,
+        "mae": 12.901085929870606,
+        "mape": 72.0482155855337,
+        "r2": -12.114094626069111
+      },
+      "parameters": {
+        "learning_rate": 0.002,
+        "batch_size": 24,
+        "dropout": 0.1,
+        "epochs": 77,
+        "val_mae": 0.40227869153022766
+      }
+    },
+    "c2": {
+      "name": "C2 — Plasticidade",
+      "description": "Limite de Liquidez e Índice de Plasticidade",
+      "n_features": 2,
+      "features": [
+        "LL",
+        "IP"
+      ],
+      "validation": {
+        "name": "C2 — Plasticidade",
+        "mse": 272.34655075834286,
+        "rmse": 16.502925521202076,
+        "mae": 9.258925030730492,
+        "mape": 64.62738308777844,
+        "r2": 0.3095328159178139
+      },
+      "test": {
+        "name": "C2 — Plasticidade",
+        "mse": 277.71850990397195,
+        "rmse": 16.66488853559999,
+        "mae": 10.636428074097969,
+        "mape": 63.830771051428755,
+        "r2": 0.34696541117547186
+      },
+      "parameters": {
+        "learning_rate": 0.0002,
+        "batch_size": 48,
+        "dropout": 0.05,
+        "epochs": 116,
+        "val_mae": 0.5360695719718933
+      }
+    },
+    "c3": {
+      "name": "C3 — Compactação",
+      "description": "Umidade ótima e densidade máxima seca (Proctor)",
+      "n_features": 2,
+      "features": [
+        "Umidade Ótima",
+        "Densidade máxima"
+      ],
+      "validation": {
+        "name": "C3 — Compactação",
+        "mse": 170.10453872210783,
+        "rmse": 13.042413071288143,
+        "mae": 6.465572582954583,
+        "mape": 30.325655953646912,
+        "r2": 0.568742098902991
+      },
+      "test": {
+        "name": "C3 — Compactação",
+        "mse": 150.2359447803767,
+        "rmse": 12.257077334355719,
+        "mae": 6.858034633582745,
+        "mape": 28.51252926751529,
+        "r2": 0.6467312587114142
+      },
+      "parameters": {
+        "learning_rate": 0.005,
+        "batch_size": 48,
+        "dropout": 0.15,
+        "epochs": 123,
+        "val_mae": 0.37605082988739014
+      }
+    },
+    "c4": {
+      "name": "C4 — Granulometria + Plasticidade",
+      "description": "Curva granulométrica somada a LL e IP",
+      "n_features": 8,
+      "features": [
+        "25.4mm",
+        "9.5mm",
+        "4.8mm",
+        "2.0mm",
+        "0.42mm",
+        "0.076mm",
+        "LL",
+        "IP"
+      ],
+      "validation": {
+        "name": "C4 — Granulometria + Plasticidade",
+        "mse": 128.94521407086083,
+        "rmse": 11.355404619425096,
+        "mae": 6.327413118689558,
+        "mape": 29.84535813629646,
+        "r2": 0.6730913660831278
+      },
+      "test": {
+        "name": "C4 — Granulometria + Plasticidade",
+        "mse": 160.18184207195202,
+        "rmse": 12.656296538559454,
+        "mae": 6.733090319264103,
+        "mape": 29.53517299509051,
+        "r2": 0.6233442149362598
+      },
+      "parameters": {
+        "learning_rate": 0.0005,
+        "batch_size": 48,
+        "dropout": 0.05,
+        "epochs": 126,
+        "val_mae": 0.4098711311817169
+      }
+    },
+    "c5": {
+      "name": "C5 — Todos",
+      "description": "Todas as variáveis de entrada disponíveis",
+      "n_features": 10,
+      "features": [
+        "25.4mm",
+        "9.5mm",
+        "4.8mm",
+        "2.0mm",
+        "0.42mm",
+        "0.076mm",
+        "LL",
+        "IP",
+        "Umidade Ótima",
+        "Densidade máxima"
+      ],
+      "validation": {
+        "name": "C5 — Todos",
+        "mse": 148.99955994952407,
+        "rmse": 12.206537590550568,
+        "mae": 6.7507220507777,
+        "mape": 31.119994729575147,
+        "r2": 0.6222485421556923
+      },
+      "test": {
+        "name": "C5 — Todos",
+        "mse": 178.7966425478785,
+        "rmse": 13.371486175735235,
+        "mae": 6.983418695557286,
+        "mape": 29.157066576476087,
+        "r2": 0.5795728848256
+      },
+      "parameters": {
+        "learning_rate": 0.0005,
+        "batch_size": 48,
+        "dropout": 0.05,
+        "epochs": 83,
+        "val_mae": 0.3855372667312622
+      }
+    }
+  }
+}

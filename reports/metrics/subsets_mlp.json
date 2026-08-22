@@ -1,0 +1,12 @@
+{
+  "key": "subsets_mlp",
+  "label": "Conjuntos C1–C5 — Rede Neural",
+  "split": "teste",
+  "recorded_at": "2026-08-19T11:57:57",
+  "r2": 0.6467312587114142,
+  "mae": 6.858034633582745,
+  "rmse": 12.257077334355719,
+  "mse": 150.2359447803767,
+  "mape": 28.51252926751529,
+  "conjunto": "C3 — Compactação"
+}

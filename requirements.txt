@@ -1,0 +1,33 @@
+# Previsão de CBR por Machine Learning — dependências
+#
+# Arquivo em UTF-8. A versão anterior estava salva em UTF-16, que o pip
+# interpreta como um único nome de pacote corrompido.
+#
+# Instalação:
+#   python -m venv .venv
+#   .venv\Scripts\activate            (Windows)
+#   pip install -r requirements.txt
+#
+# Verificação:
+#   python src/main.py --check
+
+# ── Núcleo: dados, modelos de árvore e gráficos ──────────────────────────────
+numpy>=2.2
+pandas>=2.3
+scipy>=1.16
+scikit-learn>=1.7
+joblib>=1.5
+matplotlib>=3.10
+seaborn>=0.13
+
+# ── Planilhas — necessário para ler .xlsx em data/raw ────────────────────────
+openpyxl>=3.1
+
+# ── Interface de terminal ────────────────────────────────────────────────────
+rich>=14.0
+
+# ── Rede neural — necessário para mlp.py e subsets_mlp.py ────────────────────
+tensorflow>=2.20
+
+# ── Dashboard — necessário para dashboard.py ─────────────────────────────────
+streamlit>=1.40
