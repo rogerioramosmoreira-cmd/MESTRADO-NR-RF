@@ -65,38 +65,69 @@ def _available_subsets(loaded: dict[str, dict]) -> list[str]:
 def chart_metric_by_model(loaded: dict[str, dict], keys: list[str],
                           metric: str, axis_label: str,
                           lower_is_better: bool) -> list[Path]:
-    """Barras agrupadas: um grupo por conjunto, uma barra por modelo."""
-    figure, axes = plots.new_axes(figsize=(12, 6))
+    """
+    Barras agrupadas: um grupo por conjunto, uma barra por modelo.
 
+    Passa pelo mesmo `bar_panels` dos gráficos de um modelo só: quando a rede
+    neural diverge em um conjunto, o MSE dela chega a 5577 contra 68–278 de
+    todo o resto, e num eixo único as outras nove barras viram uma faixa
+    rasteira onde não se compara mais nada.
+    """
     positions = np.arange(len(keys))
     bar_width = 0.8 / len(loaded)
+    all_values = [_metric(payload, key, metric)
+                  for payload in loaded.values() for key in keys]
 
-    for index, (model, payload) in enumerate(loaded.items()):
-        offset = (index - (len(loaded) - 1) / 2) * bar_width
-        values = [_metric(payload, key, metric) for key in keys]
-        bars = axes.bar(positions + offset, values, width=bar_width * 0.9,
-                        color=MODEL_COLORS[model], edgecolor="white", alpha=0.9,
-                        label=MODEL_LABELS[model])
-        for bar, value in zip(bars, values):
-            axes.text(bar.get_x() + bar.get_width() / 2,
-                      bar.get_height() + max(values) * 0.015,
-                      f"{value:.3f}", ha="center", va="bottom", fontsize=8)
+    figure, panels, apply_limits = plots.bar_panels(
+        all_values, figsize=(12, 6), broken_figsize=(12, 7.5))
+    broken = len(panels) > 1
 
-    axes.set_xticks(positions)
-    axes.set_xticklabels([SUBSETS[key].name for key in keys],
-                         fontsize=8, rotation=12, ha="right")
-    axes.set_ylabel(axis_label)
+    for axes in panels:
+        for index, (model, payload) in enumerate(loaded.items()):
+            offset = (index - (len(loaded) - 1) / 2) * bar_width
+            values = [_metric(payload, key, metric) for key in keys]
+            bars = axes.bar(positions + offset, values, width=bar_width * 0.9,
+                            color=MODEL_COLORS[model], edgecolor="white",
+                            alpha=0.9, label=MODEL_LABELS[model])
+            plots.value_labels(axes, bars, values, fmt="{:.3f}",
+                               fontsize=8, fontweight="normal", clip=broken)
+
+        axes.set_xticks(positions)
+        # Sigla no tick, nome completo no rodapé: rótulo longo e inclinado no
+        # eixo x colide com o vizinho e come altura da área de dados.
+        axes.set_xticklabels([key.upper() for key in keys], fontsize=10)
+        if any(value < 0 for value in all_values):
+            axes.axhline(0, lw=1.0, color=PALETTE["ink"], alpha=0.6)
+
+    # Depois das barras, nunca antes — ver a nota em `plots.bar_panels`.
+    apply_limits()
+
+    if broken:
+        figure.supylabel(axis_label, fontsize=11, x=0.03)
+        lines_extra = ["Eixo interrompido: as alturas não são comparáveis "
+                       "entre os dois painéis."]
+    else:
+        panels[0].set_ylabel(axis_label)
+        lines_extra = []
+
+    # Legenda dos modelos só uma vez, mesmo com dois painéis.
+    plots.legend(panels[0], loc="upper right", fontsize=9)
 
     winners = []
     for key in keys:
         scores = {model: _metric(payload, key, metric)
                   for model, payload in loaded.items()}
         winner = min(scores, key=scores.get) if lower_is_better else max(scores, key=scores.get)
-        winners.append(f"{SUBSETS[key].name}: {MODEL_LABELS[winner]}")
-    plots.note(axes, "Vencedor por conjunto — " + " | ".join(winners), PALETTE["ink"])
-    plots.legend(axes, loc="upper right", fontsize=8)
+        winners.append(f"{key.upper()}: {MODEL_LABELS[winner]}")
 
-    return plots.save(figure, f"modelos_{metric}", *OUTPUT_SUBFOLDERS)
+    lines = [f"{SUBSETS[key].name}: {SUBSETS[key].description}" for key in keys]
+    lines.append("Vencedor por conjunto — " + " | ".join(winners))
+    lines += lines_extra
+    plots.reserve_bottom(figure, len(lines))
+    plots.caption(figure, lines)
+
+    return plots.save(figure, f"modelos_{metric}", *OUTPUT_SUBFOLDERS,
+                      tight=False)
 
 
 def chart_model_difference(loaded: dict[str, dict], keys: list[str]) -> list[Path]:
@@ -125,31 +156,25 @@ def chart_model_difference(loaded: dict[str, dict], keys: list[str]) -> list[Pat
                  label="Empate entre os modelos")
 
     span = max(abs(value) for value in differences) or 1.0
-    for bar, value in zip(bars, differences):
-        axes.text(bar.get_x() + bar.get_width() / 2,
-                  value + (span * 0.03 if value >= 0 else -span * 0.03),
-                  f"{value:+.3f}", ha="center",
-                  va="bottom" if value >= 0 else "top",
-                  fontsize=9, fontweight="bold")
+    plots.value_labels(axes, bars, differences, fmt="{:+.3f}")
 
     axes.set_xticks(range(len(keys)))
-    axes.set_xticklabels([SUBSETS[key].name for key in keys],
-                         fontsize=8, rotation=12, ha="right")
+    axes.set_xticklabels([key.upper() for key in keys], fontsize=10)
     axes.set_ylabel("MSE(Árvore Aleatória) − MSE(Rede Neural)")
 
     # Folga acima e abaixo para os rótulos de valor, que ficam do lado de fora
     # da barra e encostariam na borda do eixo.
-    axes.set_ylim(min(differences) - span * 0.22, max(differences) + span * 0.30)
+    axes.set_ylim(min(differences) - span * 0.25, max(differences) + span * 0.32)
+    plots.legend(axes, loc="upper right", fontsize=9)
 
-    plots.note(axes, "Barra negativa: Árvore Aleatória tem menor erro",
-               MODEL_COLORS["random_forest"])
-    plots.note(axes, "Barra positiva: Rede Neural tem menor erro",
-               MODEL_COLORS["mlp"])
-    # Canto inferior esquerdo: as barras grandes deste gráfico são negativas e
-    # se concentram no centro e à direita, então é o único canto livre.
-    plots.legend(axes, loc="lower left", fontsize=8)
+    lines = [f"{SUBSETS[key].name}: {SUBSETS[key].description}" for key in keys]
+    lines.append("Barra negativa: Árvore Aleatória tem menor erro   |   "
+                 "Barra positiva: Rede Neural tem menor erro")
+    plots.reserve_bottom(figure, len(lines))
+    plots.caption(figure, lines)
 
-    return plots.save(figure, "modelos_diferenca_mse", *OUTPUT_SUBFOLDERS)
+    return plots.save(figure, "modelos_diferenca_mse", *OUTPUT_SUBFOLDERS,
+                      tight=False)
 
 
 def chart_paired_predictions(loaded: dict[str, dict],
@@ -183,13 +208,23 @@ def chart_paired_predictions(loaded: dict[str, dict],
         panel.set_ylim(limits)
         panel.set_xlabel("CBR medido (%)")
         panel.set_ylabel("CBR previsto (%)")
-        plots.note(panel, SUBSETS[key].name, SUBSET_COLORS[key])
-        plots.legend(panel, loc="upper left", fontsize=7)
+        # Identificação do painel fora da área de dados, acima do eixo: dentro
+        # da legenda ela empurrava a caixa sobre a nuvem de pontos.
+        panel.text(0.0, 1.02, SUBSETS[key].name, transform=panel.transAxes,
+                   fontsize=10, fontweight="bold", color=SUBSET_COLORS[key],
+                   ha="left", va="bottom")
+        plots.legend(panel, loc="lower right", fontsize=7)
 
     for unused in panels[len(keys):]:
         unused.axis("off")
 
-    return plots.save(figure, "modelos_previsto_vs_real", *OUTPUT_SUBFOLDERS)
+    lines = [f"{SUBSETS[key].name}: {SUBSETS[key].description}" for key in keys]
+    figure.subplots_adjust(bottom=0.08 + 0.030 * len(lines), hspace=0.38,
+                           wspace=0.26, top=0.95)
+    plots.caption(figure, lines)
+
+    return plots.save(figure, "modelos_previsto_vs_real", *OUTPUT_SUBFOLDERS,
+                      tight=False)
 
 
 def chart_summary_table(loaded: dict[str, dict], keys: list[str]) -> list[Path]:

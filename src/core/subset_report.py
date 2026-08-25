@@ -163,13 +163,20 @@ def chart_predicted_vs_actual(result: SubsetResult) -> list[Path]:
     axes.set_xlabel("CBR medido (%)")
     axes.set_ylabel("CBR previsto (%)")
 
-    plots.note(axes, f"R² = {result.test.r2:.4f}", color)
-    plots.note(axes, f"MSE = {result.test.mse:.4f}", color)
-    plots.note(axes, f"{len(result.subset)} variável(is) de entrada", PALETTE["ink"])
     plots.legend(axes, loc="upper left")
 
+    # Métricas no rodapé: dentro dos eixos, este canto é justamente onde caem os
+    # pontos de um modelo que superestima, e a caixa passava por cima deles.
+    plots.reserve_bottom(figure, 2)
+    plots.caption(figure, [
+        f"{result.subset.name}: {result.subset.description} "
+        f"({len(result.subset)} variável(is) de entrada)",
+        f"R² = {result.test.r2:.4f}   |   MSE = {result.test.mse:.4f}   |   "
+        f"RMSE = {result.test.rmse:.4f}   |   MAE = {result.test.mae:.4f}",
+    ])
+
     return plots.save(figure, "previsto_vs_real",
-                      "subsets", result.model, result.subset_key)
+                      "subsets", result.model, result.subset_key, tight=False)
 
 
 def chart_residuals(result: SubsetResult) -> list[Path]:
@@ -186,11 +193,17 @@ def chart_residuals(result: SubsetResult) -> list[Path]:
     axes.set_xlabel("CBR previsto (%)")
     axes.set_ylabel("Resíduo (medido − previsto)")
 
-    plots.note(axes, f"Desvio padrão = {np.std(residuals):.3f}", color)
-    plots.note(axes, f"Viés médio = {np.mean(residuals):+.3f}", color)
     plots.legend(axes, loc="upper right")
 
-    return plots.save(figure, "residuos", "subsets", result.model, result.subset_key)
+    plots.reserve_bottom(figure, 2)
+    plots.caption(figure, [
+        f"{result.subset.name}: {result.subset.description}",
+        f"Desvio padrão = {np.std(residuals):.3f}   |   "
+        f"Viés médio = {np.mean(residuals):+.3f}",
+    ])
+
+    return plots.save(figure, "residuos", "subsets", result.model,
+                      result.subset_key, tight=False)
 
 
 def chart_feature_importance(result: SubsetResult) -> list[Path] | None:
@@ -210,13 +223,19 @@ def chart_feature_importance(result: SubsetResult) -> list[Path] | None:
     axes.set_yticklabels(labels, fontsize=9)
     axes.invert_yaxis()
     axes.set_xlabel("Importância (Gini)")
-
-    plots.note(axes, f"Mais influente: {labels[0]} ({values[0]:.3f})",
-               SUBSET_COLORS[result.subset_key])
+    # Folga à direita: a barra mais longa encostava na borda e o valor colado
+    # nela ficava sem espaço.
+    axes.set_xlim(0, float(values.max()) * 1.18)
     plots.legend(axes, loc="lower right")
 
+    plots.reserve_bottom(figure, 2)
+    plots.caption(figure, [
+        f"{result.subset.name}: {result.subset.description}",
+        f"Mais influente: {labels[0]} ({values[0]:.3f})",
+    ])
+
     return plots.save(figure, "importancia_features",
-                      "subsets", result.model, result.subset_key)
+                      "subsets", result.model, result.subset_key, tight=False)
 
 
 def chart_learning_curve(result: SubsetResult) -> list[Path] | None:
@@ -255,78 +274,117 @@ def chart_learning_curve(result: SubsetResult) -> list[Path] | None:
 
 def chart_metric_by_subset(results: list[SubsetResult], metric: str,
                            axis_label: str, lower_is_better: bool) -> list[Path]:
-    """Barras de uma métrica nos cinco conjuntos, com o melhor destacado."""
+    """
+    Barras de uma métrica nos cinco conjuntos, com o melhor destacado.
+
+    Duas coisas que este gráfico precisa resolver e antes não resolvia:
+
+    1. A descrição dos cinco conjuntos ia para a legenda, dentro dos eixos, e a
+       caixa resultante cobria as barras. Agora vai para o rodapé da figura.
+    2. Uma rede neural que diverge em um conjunto produz R² = −12 contra 0,6 dos
+       outros. Num eixo linear único, esse valor achata os outros quatro contra
+       o zero; quando a dispersão é essa, o eixo é quebrado.
+    """
     ordered = _ordered(results)
-    values = [getattr(result.test, metric) for result in ordered]
+    values = [float(getattr(result.test, metric)) for result in ordered]
     best = int(np.argmin(values) if lower_is_better else np.argmax(values))
-
-    figure, axes = plots.new_axes(figsize=(10, 5.5))
     colors = [SUBSET_COLORS[result.subset_key] for result in ordered]
-    bars = axes.bar(range(len(ordered)), values, color=colors,
-                    edgecolor="white", alpha=0.9)
-    bars[best].set_edgecolor(PALETTE["ink"])
-    bars[best].set_linewidth(2.0)
+    # Só a sigla nos ticks; o nome completo está no rodapé. Rótulo longo e
+    # inclinado no eixo x é o outro jeito de dois textos se atropelarem.
+    ticks = [result.subset.key.upper() for result in ordered]
 
-    for bar, value in zip(bars, values):
-        axes.text(bar.get_x() + bar.get_width() / 2,
-                  bar.get_height() + max(values) * 0.015,
-                  f"{value:.4f}", ha="center", va="bottom",
-                  fontsize=9, fontweight="bold")
+    figure, panels, apply_limits = plots.bar_panels(values)
+    broken = len(panels) > 1
 
-    axes.set_xticks(range(len(ordered)))
-    axes.set_xticklabels([result.subset.name for result in ordered],
-                         fontsize=8, rotation=12, ha="right")
-    axes.set_ylabel(axis_label)
+    for axes in panels:
+        bars = axes.bar(range(len(ordered)), values, color=colors,
+                        edgecolor="white", alpha=0.9)
+        bars[best].set_edgecolor(PALETTE["ink"])
+        bars[best].set_linewidth(2.0)
+        plots.value_labels(axes, bars, values, clip=broken)
+        axes.set_xticks(range(len(ordered)))
+        axes.set_xticklabels(ticks, fontsize=10)
 
-    for result, color in zip(ordered, colors):
-        plots.note(axes, f"{result.subset.name}: {result.subset.description}", color)
-    plots.note(axes,
-               f"Melhor: {ordered[best].subset.name} "
-               f"({axis_label} = {values[best]:.4f})", PALETTE["ink"])
-    plots.legend(axes, loc="upper left", fontsize=7)
+    # Depois das barras, nunca antes — ver a nota em `plots.bar_panels`.
+    apply_limits()
+
+    if broken:
+        figure.supylabel(axis_label, fontsize=11, x=0.03)
+    else:
+        panels[0].set_ylabel(axis_label)
+
+    lines = [f"{result.subset.name}: {result.subset.description}"
+             for result in ordered]
+    lines.append(f"Melhor: {ordered[best].subset.name} "
+                 f"({axis_label} = {values[best]:.4f})")
+    if broken:
+        lines.append("Eixo interrompido: as alturas não são comparáveis entre "
+                     "os dois painéis.")
+
+    plots.reserve_bottom(figure, len(lines))
+    plots.caption(figure, lines)
 
     model = ordered[0].model
-    return plots.save(figure, f"comparativo_{metric}", "subsets", model)
+    return plots.save(figure, f"comparativo_{metric}", "subsets", model,
+                      tight=False)
 
 
 def chart_all_metrics(results: list[SubsetResult]) -> list[Path]:
     """
-    Barras agrupadas de todas as métricas, divididas em dois painéis.
+    Uma métrica por painel, cada uma com a sua escala.
 
-    O MSE fica na casa das dezenas enquanto o R² fica abaixo de 1. Em um eixo
-    compartilhado as barras de R² viram uma lasca invisível, então as métricas
-    de erro e a variância explicada ganham escalas próprias.
+    Antes MSE, RMSE e MAE dividiam um eixo. Como o MSE é quadrático, ele chega
+    a milhares enquanto RMSE e MAE ficam nas dezenas — e as barras dessas duas
+    sumiam contra o chão do gráfico. Não era escolha de estilo: duas das quatro
+    métricas eram ilegíveis.
+
+    Com um painel por métrica, cada uma ocupa a própria faixa e as quatro ficam
+    comparáveis entre conjuntos, que é a pergunta que o gráfico responde.
     """
     ordered = _ordered(results)
-    panels = [
-        ([("mse", "MSE"), ("rmse", "RMSE"), ("mae", "MAE")],
-         "Erro (escala de CBR %) — menor é melhor"),
-        ([("r2", "R²")], "Variância explicada — maior é melhor"),
+    metrics = [
+        ("mse", "MSE — menor é melhor"),
+        ("rmse", "RMSE (CBR %) — menor é melhor"),
+        ("mae", "MAE (CBR %) — menor é melhor"),
+        ("r2", "R² — maior é melhor"),
     ]
 
-    figure, grid = plots.new_grid(1, 2, figsize=(14, 6),
-                                  gridspec_kw={"width_ratios": [3, 1]})
-    bar_width = 0.8 / len(ordered)
+    figure, grid = plots.new_grid(2, 2, figsize=(13, 8.5))
+    panels = np.atleast_1d(grid).ravel()
+    ticks = [result.subset.key.upper() for result in ordered]
+    colors = [SUBSET_COLORS[result.subset_key] for result in ordered]
 
-    for axes, (metric_names, axis_label) in zip(np.atleast_1d(grid).ravel(), panels):
-        positions = np.arange(len(metric_names))
-        for index, result in enumerate(ordered):
-            offset = (index - (len(ordered) - 1) / 2) * bar_width
-            values = [getattr(result.test, key) for key, _ in metric_names]
-            axes.bar(positions + offset, values, width=bar_width * 0.92,
-                     color=SUBSET_COLORS[result.subset_key], edgecolor="white",
-                     label=f"{result.subset.name} ({len(result.subset)} var.)")
+    for axes, (metric, axis_label) in zip(panels, metrics):
+        values = [float(getattr(result.test, metric)) for result in ordered]
+        bars = axes.bar(range(len(ordered)), values, color=colors,
+                        edgecolor="white", alpha=0.9)
 
-        axes.set_xticks(positions)
-        axes.set_xticklabels([label for _, label in metric_names])
-        axes.set_ylabel(axis_label)
+        # Rótulo por barra tornaria o painel pequeno ilegível; o valor exato
+        # está na tabela-resumo. Aqui interessa a forma da comparação.
+        axes.set_xticks(range(len(ordered)))
+        axes.set_xticklabels(ticks, fontsize=9)
+        axes.set_ylabel(axis_label, fontsize=9)
+        axes.tick_params(labelsize=8)
 
-    # Uma legenda só para a figura: os dois painéis mostram as mesmas cinco
-    # séries, e repeti-la gastaria espaço dizendo duas vezes a mesma coisa.
-    plots.legend(np.atleast_1d(grid).ravel()[0], loc="upper right", ncol=2)
+        if min(values) < 0:
+            axes.axhline(0, lw=1.0, color=PALETTE["ink"], alpha=0.6)
+        plots.headroom(axes, top=0.12, bottom=0.08 if min(values) < 0 else 0.0)
+
+        # Uma série por conjunto, registrada uma vez só para a legenda comum.
+        if metric == metrics[0][0]:
+            for bar, result in zip(bars, ordered):
+                bar.set_label(f"{result.subset.key.upper()} — "
+                              f"{result.subset.description} "
+                              f"({len(result.subset)} var.)")
+
+    lines = [f"{result.subset.name}: {result.subset.description}"
+             for result in ordered]
+    figure.subplots_adjust(bottom=0.10 + 0.028 * len(lines), hspace=0.35,
+                           wspace=0.28)
+    plots.caption(figure, lines)
 
     return plots.save(figure, "comparativo_todas_metricas",
-                      "subsets", ordered[0].model)
+                      "subsets", ordered[0].model, tight=False)
 
 
 def chart_residual_spread(results: list[SubsetResult]) -> list[Path]:
@@ -344,23 +402,33 @@ def chart_residual_spread(results: list[SubsetResult]) -> list[Path]:
 
     axes.axhline(0, lw=1.4, linestyle="--", color=PALETTE["orange"],
                  label="Erro zero")
-    axes.set_xticklabels([result.subset.name for result in ordered],
-                         fontsize=8, rotation=12, ha="right")
+    axes.set_xticks(range(1, len(ordered) + 1))
+    axes.set_xticklabels([result.subset.key.upper() for result in ordered],
+                         fontsize=10)
     axes.set_ylabel("Resíduo (medido − previsto)")
-
-    for result in ordered:
-        plots.note(axes,
-                   f"{result.subset.name}: σ = {np.std(result.residuals_test):.3f}",
-                   SUBSET_COLORS[result.subset_key])
     plots.legend(axes, loc="upper right", fontsize=8)
 
-    return plots.save(figure, "comparativo_residuos", "subsets", ordered[0].model)
+    # O desvio padrão de cada conjunto é o número que se lê deste gráfico, mas
+    # cinco linhas dele na legenda cobriam justamente as caixas que descrevem.
+    lines = [f"{result.subset.name}: σ = {np.std(result.residuals_test):.3f} "
+             f"— {result.subset.description}" for result in ordered]
+    plots.reserve_bottom(figure, len(lines))
+    plots.caption(figure, lines)
+
+    return plots.save(figure, "comparativo_residuos", "subsets",
+                      ordered[0].model, tight=False)
 
 
 def chart_overlaid_predictions(results: list[SubsetResult]) -> list[Path]:
-    """Os cinco conjuntos sobrepostos no mesmo plano previsto × medido."""
+    """
+    Os cinco conjuntos sobrepostos no mesmo plano previsto × medido.
+
+    A legenda vai para baixo da figura. Num gráfico de dispersão não existe
+    canto garantidamente livre — a nuvem muda de forma a cada treino, e um
+    `loc` fixo escolhido na mão acerta hoje e cobre pontos amanhã.
+    """
     ordered = _ordered(results)
-    figure, axes = plots.new_axes(figsize=(8, 7))
+    figure, axes = plots.new_axes(figsize=(8.5, 8))
 
     every_value = np.concatenate(
         [np.concatenate([r.y_test, r.prediction_test]) for r in ordered]
@@ -371,7 +439,8 @@ def chart_overlaid_predictions(results: list[SubsetResult]) -> list[Path]:
         axes.scatter(result.y_test, result.prediction_test, alpha=0.55, s=38,
                      color=SUBSET_COLORS[result.subset_key],
                      edgecolors="white", linewidths=0.3,
-                     label=f"{result.subset.name} — R² {result.test.r2:.3f}")
+                     label=f"{result.subset.key.upper()} — "
+                           f"R² {result.test.r2:.3f}")
 
     axes.plot(limits, limits, "--", lw=1.5, color=PALETTE["orange"],
               label="Previsão ideal (1:1)")
@@ -379,10 +448,18 @@ def chart_overlaid_predictions(results: list[SubsetResult]) -> list[Path]:
     axes.set_ylim(limits)
     axes.set_xlabel("CBR medido (%)")
     axes.set_ylabel("CBR previsto (%)")
-    plots.legend(axes, loc="upper left", fontsize=8)
+
+    # Rodapé empilhado, de baixo para cima: descrição dos conjuntos, legenda das
+    # séries, e só então a área de dados. Cada faixa tem a sua altura reservada.
+    lines = [f"{result.subset.name}: {result.subset.description}"
+             for result in ordered]
+    caption_height = 0.022 * len(lines)
+    figure.subplots_adjust(bottom=caption_height + 0.16)
+    plots.caption(figure, lines)
+    plots.legend_below(figure, axes, ncol=3, y=caption_height + 0.03)
 
     return plots.save(figure, "comparativo_previsto_vs_real",
-                      "subsets", ordered[0].model)
+                      "subsets", ordered[0].model, tight=False)
 
 
 def chart_subset_ranking(results: list[SubsetResult]) -> list[Path]:
@@ -403,26 +480,45 @@ def chart_subset_ranking(results: list[SubsetResult]) -> list[Path]:
     axes.set_yticks(range(len(ordered)))
     axes.set_yticklabels(labels, fontsize=9)
     axes.invert_yaxis()
-    axes.set_xlabel("MSE no conjunto de teste (menor é melhor)")
 
-    # Folga à direita para os rótulos de valor, que de outro modo seriam
-    # cortados pela borda do eixo na barra mais longa.
-    axes.set_xlim(0, max(values) * 1.28)
+    # Um conjunto em que o modelo diverge tem MSE duas ordens de grandeza acima
+    # dos demais, e em escala linear as outras quatro barras encostam no eixo.
+    # Aqui a escala logarítmica serve bem: o que este gráfico comunica é a
+    # ordem — que a escala preserva — e o valor exato, que está escrito na
+    # barra. O MSE é sempre positivo, então o log é sempre definido.
+    logarithmic = plots.find_scale_break(values) is not None
+    if logarithmic:
+        axes.set_xscale("log")
+        axes.set_xlim(min(values) * 0.55, max(values) * 4.0)
+    else:
+        # Folga à direita para os rótulos de valor, que de outro modo seriam
+        # cortados pela borda do eixo na barra mais longa.
+        axes.set_xlim(0, max(values) * 1.32)
+
+    axes.set_xlabel("MSE no conjunto de teste (menor é melhor)"
+                    + (" — escala logarítmica" if logarithmic else ""))
 
     for bar, result in zip(bars, ordered):
-        axes.text(bar.get_width() + max(values) * 0.015,
-                  bar.get_y() + bar.get_height() / 2,
+        # Em escala logarítmica o afastamento precisa ser multiplicativo: uma
+        # folga fixa que funciona na barra longa some sob a barra curta.
+        width = bar.get_width()
+        offset = width * 0.10 if logarithmic else max(values) * 0.015
+        axes.text(width + offset, bar.get_y() + bar.get_height() / 2,
                   f"{result.test.mse:.4f}  ({len(result.subset)} var.)",
                   va="center", fontsize=8, fontweight="bold")
 
-    # Ancorada no canto superior direito: as barras estão em ordem crescente e o
-    # eixo é invertido, então a mais curta fica no topo e aquele canto é sempre
-    # o mais vazio.
-    plots.note(axes, f"Melhor conjunto: {ordered[0].subset.name}", PALETTE["ink"])
-    plots.note(axes, f"Pior conjunto: {ordered[-1].subset.name}", PALETTE["ink"])
-    plots.legend(axes, loc="upper right", fontsize=8)
+    lines = [f"Melhor conjunto: {ordered[0].subset.name} "
+             f"— {ordered[0].subset.description}",
+             f"Pior conjunto: {ordered[-1].subset.name} "
+             f"— {ordered[-1].subset.description}"]
+    if logarithmic:
+        lines.append("Escala logarítmica: os comprimentos não são "
+                     "proporcionais entre si.")
+    plots.reserve_bottom(figure, len(lines))
+    plots.caption(figure, lines)
 
-    return plots.save(figure, "ranking_conjuntos", "subsets", ordered[0].model)
+    return plots.save(figure, "ranking_conjuntos", "subsets",
+                      ordered[0].model, tight=False)
 
 
 def render_model_charts(results: list[SubsetResult]) -> list[Path]:
