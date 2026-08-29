@@ -200,7 +200,12 @@ def train_subset(frame, subset: Subset, tracker: progress.Tracker) -> SubsetResu
         f"dropout={best_configuration['dropout']:.2f} → MAE val {best_loss:.4f}"
     )
 
-    network = build_network(x_fit_scaled.shape[1],
+    # O ajuste final usa SOMENTE o conjunto de treino. Treinar em x_fit
+    # (treino+validacao) e ao mesmo tempo passar o conjunto de validacao como
+    # `validation_data` fazia o `val_loss` medir erro de treino: a metrica de
+    # validacao saia otimista e, pior, o EarlyStopping e o ReduceLROnPlateau
+    # monitoravam um sinal cego ao overfitting.
+    network = build_network(x_train_scaled.shape[1],
                             best_configuration["dropout"],
                             best_configuration["learning_rate"])
 
@@ -210,11 +215,11 @@ def train_subset(frame, subset: Subset, tracker: progress.Tracker) -> SubsetResu
     with tracker.stage(f"{subset.key.upper()} — treino final",
                        total=FINAL_EPOCHS) as stage:
         history = network.fit(
-            x_fit_scaled, y_fit,
+            x_train_scaled, y_train,
             epochs=FINAL_EPOCHS,
             batch_size=best_configuration["batch_size"],
             validation_data=(x_validation_scaled, y_validation),
-            sample_weight=sample_weights(y_fit),
+            sample_weight=sample_weights(y_train),
             callbacks=[
                 EarlyStopping(monitor="val_loss", patience=FINAL_PATIENCE,
                               restore_best_weights=True, verbose=0),

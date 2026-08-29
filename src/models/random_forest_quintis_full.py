@@ -38,6 +38,7 @@ from sklearn.model_selection import (
     train_test_split,
     RandomizedSearchCV,
     KFold,
+    cross_val_predict,
 )
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import (
@@ -96,7 +97,10 @@ VAL_SIZE        = 0.20    # 20% do restante para validação
 # O segundo valor vale apenas com MLL_FAST=1 - ver core/runtime.py.
 N_ITER_BUSCA    = runtime.budget(80, 10)   # Busca reduzida para grupos menores
 CV_FOLDS        = runtime.budget(5, 3)     # 5-fold em grupos pequenos
-META_MSE        = 0.780   # Meta de performance por grupo
+# Meta por grupo declarada em R² (ver core/metrics.py). Um limiar de MSE fixo
+# não serve aqui: a variância do CBR dentro de D1 é uma fração da de D5, então
+# o mesmo MSE significa desempenho muito diferente em cada quintil.
+META_R2         = metrics.META_R2
 MIN_AMOSTRAS    = 20
 LOG_ALVO        = True
 USE_WEIGHTS     = True
@@ -157,7 +161,7 @@ def metricas(y_true, y_pred, nome):
     mae = mean_absolute_error(y_true, y_pred)
     r2 = r2_score(y_true, y_pred)
     print(f"\n  [{nome}]")
-    print(f"    MSE  : {mse:.4f}  {'✓ META' if mse < META_MSE else '✗'}")
+    print(f"    MSE  : {mse:.4f}  {'✓ META' if r2 >= META_R2 else '✗'}")
     print(f"    RMSE : {rmse:.4f}")
     print(f"    MAE  : {mae:.4f}")
     print(f"    R²   : {r2:.4f}")
@@ -282,7 +286,10 @@ def treinar_quintil(rotulo, mask, X_full, Y_orig_full, Y_log_full):
     melhor_combo = melhores_combinacoes[0] if melhores_combinacoes else None
     if melhor_combo is not None:
         combo_text = ", ".join(melhor_combo["labels"])
-        print(f"  Melhor combinação de features: {combo_text}  |  MSE Val={melhor_combo['mse']:.4f}")
+        # MSE de selecao: o menor entre muitas combinacoes testadas no mesmo
+        # conjunto de validacao, portanto otimista por ser um maximo. Serve
+        # para ranquear features, nao como estimativa de desempenho.
+        print(f"  Melhor combinação de features: {combo_text}  |  MSE de seleção={melhor_combo['mse']:.4f}")
 
     rf_final = RandomForestRegressor(**best_params, random_state=SEED, n_jobs=-1)
     fit_kwargs_final = {"sample_weight": sw_tv} if sw_tv is not None else {}
@@ -291,19 +298,30 @@ def treinar_quintil(rotulo, mask, X_full, Y_orig_full, Y_log_full):
         with progress.joblib_stage(_stage):
             rf_final.fit(X_tv_n, Y_tv, **fit_kwargs_final)
 
-    pred_val = rf_final.predict(X_val_n)
+    # `rf_final` foi treinado em treino+validação (X_tv), então prever X_val_n
+    # devolveria erro de treino disfarçado de generalização (data leakage). A
+    # estimativa honesta vem do CV out-of-fold, ajustado só no treino.
+    rf_cv = RandomForestRegressor(**best_params, random_state=SEED, n_jobs=-1)
+    params_cv = {"sample_weight": sw_treino} if sw_treino is not None else None
+    with progress.bar(total=kf.get_n_splits()) as _stage:
+        with progress.joblib_stage(_stage):
+            pred_cv = cross_val_predict(rf_cv, X_treino_n, Y_treino,
+                                        cv=kf, n_jobs=-1, params=params_cv)
+
     pred_teste = rf_final.predict(X_teste_n)
 
     if LOG_ALVO:
-        pred_val = np.expm1(pred_val)
+        pred_cv = np.expm1(pred_cv)
         pred_teste = np.expm1(pred_teste)
-        Y_val_met = Y_orig_val
+        Y_cv_met = Y_orig_treino
         y_teste_met = Y_orig_teste
     else:
-        Y_val_met = Y_val
+        Y_cv_met = Y_treino
         y_teste_met = y_teste
 
-    met_val = metricas(Y_val_met, pred_val, f"{rotulo} — Validação")
+    meta_mse_g = metrics.meta_mse(y_teste_met)
+
+    met_cv = metricas(Y_cv_met, pred_cv, f"{rotulo} — Validação CV")
     met_teste = metricas(y_teste_met, pred_teste, f"{rotulo} — Teste")
 
     pasta_g = os.path.join(OUTPUT_DIR, rotulo)
@@ -335,15 +353,16 @@ def treinar_quintil(rotulo, mask, X_full, Y_orig_full, Y_log_full):
         "cbr_min":       Y_orig_g.min(),
         "cbr_max":       Y_orig_g.max(),
         "cbr_media":     Y_orig_g.mean(),
-        "met_val":       met_val,
+        "met_cv":        met_cv,
+        "meta_mse":      meta_mse_g,
         "met_teste":     met_teste,
         "melhor_mse_cv": melhor_mse_cv,
         "best_params":   best_params,
         "rf":            rf_final,
         "search":        search_rf,
-        "pred_val":      pred_val,
+        "pred_cv":       pred_cv,
         "pred_teste":    pred_teste,
-        "Y_val_met":     Y_val_met,
+        "Y_cv_met":      Y_cv_met,
         "y_teste_met":   y_teste_met,
         "scaler":        scaler,
         "melhores_combinacoes": melhores_combinacoes,
@@ -374,8 +393,7 @@ def grafico_distribuicao_quintis(Y_orig, limites, rotulos):
     ax.axvline(limites[-1], color=PALETTE["vermelho"], lw=1.2, linestyle="--", alpha=0.7)
 
     ax.set_xlabel("CBR (%)"); ax.set_ylabel("Frequência")
-    ax.legend(framealpha=0.9, fontsize=8, facecolor=PALETTE["fundo"],
-              edgecolor=PALETTE["grade"])
+    ax.legend()
     plt.tight_layout(); plots.save(plt.gcf(), "distribuicao_quintis", "random_forest_quintis_full")
 
 
@@ -387,7 +405,7 @@ def grafico_previsto_vs_real_grupo(res):
 
 
     dados = [
-        (res["Y_val_met"], res["pred_val"], res["met_val"], "Validação"),
+        (res["Y_cv_met"], res["pred_cv"], res["met_cv"], "Validação CV"),
         (res["y_teste_met"], res["pred_teste"], res["met_teste"], "Teste"),
     ]
     for ax, (y_true, y_pred, met, conjunto) in zip(axes, dados):
@@ -401,11 +419,12 @@ def grafico_previsto_vs_real_grupo(res):
         ax.set_xlim(lim); ax.set_ylim(lim)
 
         ax.set_xlabel("Real (CBR %)"); ax.set_ylabel("Previsto (CBR %)")
-        ax.legend(framealpha=0)
-        status = "✓ META" if met["mse"] < META_MSE else "✗ acima da meta"
-        cor_meta = PALETTE["verde"] if met["mse"] < META_MSE else PALETTE["vermelho"]
+        ax.legend()
+        status = "✓ META" if met["r2"] >= META_R2 else "✗ acima da meta"
+        cor_meta = PALETTE["verde"] if met["r2"] >= META_R2 else PALETTE["vermelho"]
         ax.text(0.98, 0.05, status, transform=ax.transAxes, ha="right",
-                fontsize=9, fontweight="bold", color=cor_meta)
+                fontsize=10, fontweight="bold", color=cor_meta,
+                bbox=dict(boxstyle="round,pad=0.35", facecolor="#FFFFFF", edgecolor="#E2E8F0", alpha=0.93))
 
     plt.tight_layout(); plots.save(plt.gcf(), "previsto_vs_real_grupo", "random_forest_quintis_full")
 
@@ -418,7 +437,7 @@ def grafico_residuos_grupo(res):
 
 
     dados = [
-        (res["Y_val_met"], res["pred_val"], "Validação"),
+        (res["Y_cv_met"], res["pred_cv"], "Validação CV"),
         (res["y_teste_met"], res["pred_teste"], "Teste"),
     ]
     for ax, (y_true, y_pred, conjunto) in zip(axes, dados):
@@ -432,7 +451,7 @@ def grafico_residuos_grupo(res):
         ax.axhspan(-mae, mae, alpha=0.08, color=cor, label=f"±MAE ({mae:.2f})")
 
         ax.set_xlabel("Previsto (CBR %)"); ax.set_ylabel("Resíduo (Real − Previsto)")
-        ax.legend(framealpha=0, fontsize=8)
+        ax.legend()
 
     plt.tight_layout(); plots.save(plt.gcf(), "residuos_grupo", "random_forest_quintis_full")
 
@@ -464,11 +483,10 @@ def grafico_busca_grupo(res):
 
     ax.axhline(mse_acum[-1], color=PALETTE["verde"], lw=1.2, linestyle="--",
                label=f"Melhor MSE = {mse_acum[-1]:.4f}")
-    ax.axhline(META_MSE, color=PALETTE["vermelho"], lw=1.0, linestyle=":",
-               label=f"Meta = {META_MSE}")
+    # Sem linha de meta: eixo na escala log1p da busca, meta na escala do CBR.
     ax.set_xlabel("Iteração"); ax.set_ylabel("MSE CV (mínimo acumulado)")
 
-    ax.legend(framealpha=0, fontsize=8)
+    ax.legend()
 
     ax2 = axes[1]
     ax2.set_facecolor(PALETTE["fundo"])
@@ -481,14 +499,13 @@ def grafico_busca_grupo(res):
                    edgecolor="white", alpha=0.85)
     ax2.errorbar(range(len(top_idx)), top_mse, yerr=top_std,
                  fmt="none", color="#374151", capsize=3, lw=1.0)
-    ax2.axhline(META_MSE, color=PALETTE["vermelho"], lw=1.0, linestyle=":",
-                label=f"Meta = {META_MSE}")
+    # Sem linha de meta: eixo na escala log1p da busca.
     for bar, val in zip(bars, top_mse):
         ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005,
-                 f"{val:.3f}", ha="center", va="bottom", fontsize=7, fontweight="bold")
+                 f"{val:.3f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
 
     ax2.set_xlabel("Ranking"); ax2.set_ylabel("MSE CV")
-    ax2.legend(framealpha=0, fontsize=8)
+    ax2.legend()
 
     plt.tight_layout(); plots.save(plt.gcf(), "busca_grupo", "random_forest_quintis_full")
 
@@ -510,7 +527,7 @@ def grafico_importancia_grupo(res):
 
     ax.barh(range(len(FEATURES)), imp[idx], color=cores_g, edgecolor="white")
     ax.set_yticks(range(len(FEATURES)))
-    ax.set_yticklabels([FEATURES_LABELS[i] for i in idx], fontsize=9)
+    ax.set_yticklabels([FEATURES_LABELS[i] for i in idx], fontsize=10)
     ax.invert_yaxis()
 
     ax.set_xlabel("Importância (Gini)")
@@ -533,7 +550,7 @@ def grafico_melhor_combinacao(res):
     mses = [c["mse"] for c in combos]
     ax.barh(range(len(labels)), mses, color=[cor if i == 0 else PALETTE["azul2"] for i in range(len(labels))], edgecolor="white")
     ax.set_yticks(range(len(labels)))
-    ax.set_yticklabels(labels, fontsize=9)
+    ax.set_yticklabels(labels, fontsize=10)
     ax.invert_yaxis()
     ax.set_xlabel("MSE Validação")
 
@@ -580,26 +597,30 @@ def grafico_comparativo_final(resultados):
     ax_mse.set_facecolor(PALETTE["fundo"])
     ax_mse.spines["top"].set_visible(False); ax_mse.spines["right"].set_visible(False)
     bars = ax_mse.bar(rotulos, mse_vals, color=cores, edgecolor="white", width=0.6)
-    ax_mse.axhline(META_MSE, color=PALETTE["vermelho"], lw=1.5, linestyle="--",
-                   label=f"Meta = {META_MSE}")
+    # Uma marca de meta por barra: o limiar equivalente a R² >= META_R2 muda
+    # de grupo para grupo, junto com a variância do CBR dentro dele.
+    for pos, res_g in enumerate(resultados):
+        ax_mse.hlines(res_g["meta_mse"], pos - 0.3, pos + 0.3,
+                      color=PALETTE["vermelho"], lw=1.5, linestyle="--",
+                      label=f"Meta do grupo (R² {META_R2:.2f})" if pos == 0 else None)
     for bar, val in zip(bars, mse_vals):
         ax_mse.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
-                    f"{val:.3f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+                    f"{val:.3f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
 
-    ax_mse.set_ylabel("MSE"); ax_mse.legend(framealpha=0, fontsize=8)
+    ax_mse.set_ylabel("MSE"); ax_mse.legend()
 
     ax_r2 = fig.add_subplot(gs[0, 1])
     ax_r2.set_facecolor(PALETTE["fundo"])
     ax_r2.spines["top"].set_visible(False); ax_r2.spines["right"].set_visible(False)
     bars2 = ax_r2.bar(rotulos, r2_vals, color=cores, edgecolor="white", width=0.6)
-    ax_r2.axhline(0.8, color=PALETTE["verde"], lw=1.2, linestyle="--",
-                  alpha=0.7, label="R²=0.8 (bom)")
+    ax_r2.axhline(META_R2, color=PALETTE["verde"], lw=1.2, linestyle="--",
+                  alpha=0.7, label=f"Meta: R² = {META_R2:.2f}")
     ax_r2.axhline(0.0, color=PALETTE["vermelho"], lw=0.8, linestyle=":", alpha=0.5)
     for bar, val in zip(bars2, r2_vals):
         ax_r2.text(bar.get_x() + bar.get_width() / 2, max(val, 0) + 0.01,
-                   f"{val:.3f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+                   f"{val:.3f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
 
-    ax_r2.set_ylabel("R²"); ax_r2.legend(framealpha=0, fontsize=8)
+    ax_r2.set_ylabel("R²"); ax_r2.legend()
 
     ax_mae = fig.add_subplot(gs[0, 2])
     ax_mae.set_facecolor(PALETTE["fundo"])
@@ -607,7 +628,7 @@ def grafico_comparativo_final(resultados):
     bars3 = ax_mae.bar(rotulos, mae_vals, color=cores, edgecolor="white", width=0.6)
     for bar, val in zip(bars3, mae_vals):
         ax_mae.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.01,
-                    f"{val:.3f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+                    f"{val:.3f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
 
     ax_mae.set_ylabel("MAE (CBR %)")
 
@@ -626,8 +647,7 @@ def grafico_comparativo_final(resultados):
     ax_scatter.set_xlim(lim_g); ax_scatter.set_ylim(lim_g)
 
     ax_scatter.set_xlabel("Real (CBR %)"); ax_scatter.set_ylabel("Previsto (CBR %)")
-    ax_scatter.legend(framealpha=0.9, fontsize=8, facecolor=PALETTE["fundo"],
-                      edgecolor=PALETTE["grade"])
+    ax_scatter.legend()
 
     ax_n = fig.add_subplot(gs[1, 2])
     ax_n.set_facecolor(PALETTE["fundo"])
@@ -635,7 +655,7 @@ def grafico_comparativo_final(resultados):
     bars4 = ax_n.bar(rotulos, n_vals, color=cores, edgecolor="white", width=0.6, alpha=0.85)
     for bar, val in zip(bars4, n_vals):
         ax_n.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.5,
-                  str(val), ha="center", va="bottom", fontsize=9, fontweight="bold")
+                  str(val), ha="center", va="bottom", fontsize=10, fontweight="bold")
 
     ax_n.set_ylabel("Amostras")
 
@@ -650,7 +670,7 @@ def grafico_comparativo_final(resultados):
         bp = res_g["best_params"]
         bc = res_g["melhor_combinacao"]
         combo_text = ", ".join(bc["labels"]) if bc is not None else "—"
-        ok = "✓" if mt["mse"] < META_MSE else "✗"
+        ok = "✓" if mt["r2"] >= META_R2 else "✗"
         linhas.append([
             res_g["rotulo"],
             f"{res_g['cbr_min']:.1f}–{res_g['cbr_max']:.1f}",
@@ -701,15 +721,15 @@ def grafico_importancia_comparativa(resultados):
 
     im = ax.imshow(matriz, cmap="YlOrRd", aspect="auto")
     ax.set_xticks(range(n_feat))
-    ax.set_xticklabels(FEATURES_LABELS, rotation=35, ha="right", fontsize=8)
+    ax.set_xticklabels(FEATURES_LABELS, rotation=35, ha="right", fontsize=9.5)
     ax.set_yticks(range(len(rotulos_g)))
     ax.set_yticklabels([f"{r}\n{resultados[i]['cbr_min']:.0f}–{resultados[i]['cbr_max']:.0f}%"
-                        for i, r in enumerate(rotulos_g)], fontsize=9)
+                        for i, r in enumerate(rotulos_g)], fontsize=10)
 
     for i in range(len(rotulos_g)):
         for j in range(n_feat):
             ax.text(j, i, f"{matriz[i,j]:.3f}", ha="center", va="center",
-                    fontsize=7, color="white" if matriz[i,j] > 0.15 else "black")
+                    fontsize=9, color="white" if matriz[i,j] > 0.15 else "black")
 
     plt.colorbar(im, ax=ax, shrink=0.8, label="Importância (Gini)")
 
@@ -758,7 +778,7 @@ def fluxograma_arvore_aleatoria():
 # ═════════════════════════════════════
 print("=" * 60)
 print("  RANDOM FOREST — DIVISÃO POR QUINTIS DE CBR (D1–D5)")
-print(f"  META: MSE < {META_MSE} por grupo")
+print(f"  META: R² >= {META_R2:.2f} por grupo")
 print("=" * 60)
 
 print("\n[1/4] Carregando dados...")
@@ -829,7 +849,7 @@ print("=" * 60)
 for res_g in resultados:
     mt = res_g["met_teste"]
     combo_text = ", ".join(res_g["melhor_combinacao"]["labels"]) if res_g["melhor_combinacao"] else "—"
-    ok = "✓ META ATINGIDA" if mt["mse"] < META_MSE else "✗ acima da meta"
+    ok = "✓ META ATINGIDA" if mt["r2"] >= META_R2 else "✗ acima da meta"
     print(f"  {res_g['rotulo']}  CBR {res_g['cbr_min']:.1f}–{res_g['cbr_max']:.1f}%  "
           f"MSE={mt['mse']:.4f}  R²={mt['r2']:.4f}  [{ok}]  "
           f"Melhor combo: {combo_text}")

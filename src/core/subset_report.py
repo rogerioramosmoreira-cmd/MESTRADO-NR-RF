@@ -220,7 +220,7 @@ def chart_feature_importance(result: SubsetResult) -> list[Path] | None:
     axes.barh(range(len(values)), values, color=shades, edgecolor="white",
               label=f"{result.subset.name} — importância Gini")
     axes.set_yticks(range(len(values)))
-    axes.set_yticklabels(labels, fontsize=9)
+    axes.set_yticklabels(labels, fontsize=10)
     axes.invert_yaxis()
     axes.set_xlabel("Importância (Gini)")
     # Folga à direita: a barra mais longa encostava na borda e o valor colado
@@ -362,8 +362,8 @@ def chart_all_metrics(results: list[SubsetResult]) -> list[Path]:
         # Rótulo por barra tornaria o painel pequeno ilegível; o valor exato
         # está na tabela-resumo. Aqui interessa a forma da comparação.
         axes.set_xticks(range(len(ordered)))
-        axes.set_xticklabels(ticks, fontsize=9)
-        axes.set_ylabel(axis_label, fontsize=9)
+        axes.set_xticklabels(ticks, fontsize=10)
+        axes.set_ylabel(axis_label, fontsize=10)
         axes.tick_params(labelsize=8)
 
         if min(values) < 0:
@@ -406,7 +406,7 @@ def chart_residual_spread(results: list[SubsetResult]) -> list[Path]:
     axes.set_xticklabels([result.subset.key.upper() for result in ordered],
                          fontsize=10)
     axes.set_ylabel("Resíduo (medido − previsto)")
-    plots.legend(axes, loc="upper right", fontsize=8)
+    plots.legend(axes, loc="upper right")
 
     # O desvio padrão de cada conjunto é o número que se lê deste gráfico, mas
     # cinco linhas dele na legenda cobriam justamente as caixas que descrevem.
@@ -478,7 +478,7 @@ def chart_subset_ranking(results: list[SubsetResult]) -> list[Path]:
     bars = axes.barh(range(len(ordered)), values, height=0.62, color=colors,
                      edgecolor="white", alpha=0.9)
     axes.set_yticks(range(len(ordered)))
-    axes.set_yticklabels(labels, fontsize=9)
+    axes.set_yticklabels(labels, fontsize=10)
     axes.invert_yaxis()
 
     # Um conjunto em que o modelo diverge tem MSE duas ordens de grandeza acima
@@ -505,7 +505,7 @@ def chart_subset_ranking(results: list[SubsetResult]) -> list[Path]:
         offset = width * 0.10 if logarithmic else max(values) * 0.015
         axes.text(width + offset, bar.get_y() + bar.get_height() / 2,
                   f"{result.test.mse:.4f}  ({len(result.subset)} var.)",
-                  va="center", fontsize=8, fontweight="bold")
+                  va="center", fontsize=9.5, fontweight="bold")
 
     lines = [f"Melhor conjunto: {ordered[0].subset.name} "
              f"— {ordered[0].subset.description}",

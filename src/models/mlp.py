@@ -170,8 +170,13 @@ def exibir_metricas(y_true: np.ndarray, y_pred: np.ndarray, nome: str) -> dict:
     r2   = r2_score(y_true, y_pred)
     print(f"\n  [{nome}]")
     print(f"    MSE  : {mse:.4f}")
-    if mse <= 1:
-        print(f"    ATENÇÃO: MSE={mse:.4f} <= 1 — verifique escala ou data leakage.")
+    # Um R² quase perfeito em dados de verdade quase sempre significa que o
+    # conjunto avaliado vazou para o treino. O limiar antigo era um MSE fixo
+    # (<= 1), que só fazia sentido na escala log1p; em R² o alerta independe
+    # da escala do alvo.
+    if r2 >= 0.99:
+        print(f"    ATENÇÃO: R²={r2:.4f} — alto demais para dados novos; "
+              "verifique escala ou data leakage.")
     print(f"    RMSE : {rmse:.4f}")
     print(f"    MAE  : {mae:.4f}")
     print(f"    R²   : {r2:.4f}")
@@ -252,7 +257,7 @@ def grafico_data_leakage(hist):
     ax.plot(epocas, val_loss,   color=PALETTE["laranja"], lw=1.5, linestyle="--", label="MAE Validação")
 
     ax.set_xlabel("Época"); ax.set_ylabel("MAE")
-    ax.legend(framealpha=0)
+    ax.legend()
 
     # Painel direito: gap com faixas de diagnóstico
     ax2 = axes[1]
@@ -285,8 +290,7 @@ def grafico_data_leakage(hist):
 
 
     ax2.set_xlabel("Época"); ax2.set_ylabel("Diferença de MAE")
-    ax2.legend(framealpha=0.9, fontsize=8, facecolor=PALETTE["fundo"],
-               edgecolor=PALETTE["grade"])
+    ax2.legend()
 
     plt.tight_layout()
     plots.save(plt.gcf(), "data_leakage", "mlp")
@@ -338,7 +342,7 @@ def grafico_outliers(residuos_val, residuos_teste):
         for v in outliers:
             ax.scatter(1, v, color=PALETTE["vermelho"], s=60, zorder=5)
             ax.annotate(f"{v:.1f}", xy=(1, v), xytext=(1.15, v),
-                        fontsize=7, color=PALETTE["vermelho"],
+                        fontsize=9, color=PALETTE["vermelho"],
                         arrowprops=dict(arrowstyle="-", color=PALETTE["vermelho"], lw=0.8))
 
         n_out = len(outliers)
@@ -346,7 +350,7 @@ def grafico_outliers(residuos_val, residuos_teste):
         ax.set_ylabel("Resíduo (Real − Previsto)")
         ax.set_xticks([])
         ax.text(0.98, 0.98, f"IQR = {iqr:.2f}\nLim inf = {lim_inf:.2f}\nLim sup = {lim_sup:.2f}",
-                transform=ax.transAxes, va="top", ha="right", fontsize=8,
+                transform=ax.transAxes, va="top", ha="right", fontsize=9.5,
                 bbox=dict(boxstyle="round,pad=0.3", facecolor=PALETTE["fundo"],
                           edgecolor=PALETTE["grade"]))
 
@@ -378,7 +382,7 @@ def grafico_early_stopping(hist, epocas_reais, patience):
     ax.annotate(f"  época {melhor_epoca}\n  MAE={melhor_val:.4f}",
                 xy=(melhor_epoca, melhor_val),
                 xytext=(melhor_epoca + len(epocas) * 0.05, melhor_val * 1.05),
-                fontsize=8, color=PALETTE["verde"],
+                fontsize=9.5, color=PALETTE["verde"],
                 arrowprops=dict(arrowstyle="->", color=PALETTE["verde"]))
 
     # Janela de patience após a melhor época
@@ -391,7 +395,7 @@ def grafico_early_stopping(hist, epocas_reais, patience):
 
 
     ax.set_xlabel("Época"); ax.set_ylabel("MAE")
-    ax.legend(framealpha=0, fontsize=9)
+    ax.legend()
     plt.tight_layout()
     plots.save(plt.gcf(), "early_stopping", "mlp")
 
@@ -427,7 +431,7 @@ def grafico_r2_comparativo(r2_treino, r2_val, r2_teste):
     ax.set_xlim(-0.1, 1.15)
 
     ax.set_xlabel("R²")
-    ax.legend(framealpha=0)
+    ax.legend()
     plt.tight_layout()
     plots.save(plt.gcf(), "r2_comparativo", "mlp")
 
@@ -488,14 +492,14 @@ def grafico_raciocinio_rede(hist, epocas_reais):
                     label=f"Marco {k+1} (época {ep+1})" if k < 4 else None)
         ax1.annotate(f"M{k+1}", xy=(ep + 1, val_loss[ep]),
                      xytext=(ep + 1 + 0.5, val_loss[ep] * 0.97),
-                     fontsize=7, color=cores_evento[k], fontweight="bold")
+                     fontsize=9, color=cores_evento[k], fontweight="bold")
 
     # Melhor época
     melhor = int(np.argmin(val_loss))
     ax1.scatter([melhor + 1], [val_loss[melhor]], color=PALETTE["verde"], s=70, zorder=5,
                 label=f"Melhor val_loss (época {melhor+1})")
     ax1.set_ylabel("MAE")
-    ax1.legend(framealpha=0, fontsize=8, loc="upper right")
+    ax1.legend(loc="upper right")
 
     # ── Painel inferior: derivada (taxa de mudança) ───────────────────────────
     ax2 = axes[1]
@@ -522,7 +526,7 @@ def grafico_raciocinio_rede(hist, epocas_reais):
 
     ax2.set_xlabel("Época"); ax2.set_ylabel("Taxa de Mudança (MAE)")
 
-    ax2.legend(framealpha=0, fontsize=8, loc="upper right")
+    ax2.legend(loc="upper right")
 
     plt.tight_layout()
     plots.save(plt.gcf(), "raciocinio_rede", "mlp")
@@ -640,13 +644,17 @@ print(f"\n  Melhor config: {melhor_config}  |  MAE_val={melhor_mae_val:.4f}")
 # ─────────────────────────────────────────────
 print("\n[4/7] Treinando modelo final...")
 
-sw_tv = None
-if USE_WEIGHTS and THRESHOLD is not None:
-    thr_efetivo = np.log1p(THRESHOLD) if LOG_ALVO else THRESHOLD
-    sw_tv = np.where(Y_tv > thr_efetivo, W_MINOR, W_MAJOR).astype(np.float32)
-
+# O ajuste final usa SOMENTE o conjunto de treino. A versao anterior treinava
+# em treino+validacao (X_tv) e ainda passava (X_val_n, Y_val) como
+# `validation_data`, o que quebrava duas coisas de uma vez:
+#   1. a metrica de validacao virava erro de treino (otimista por construcao);
+#   2. o EarlyStopping e o ReduceLROnPlateau monitoravam um `val_loss` medido
+#      sobre dados ja treinados, entao o criterio de parada ficava cego ao
+#      overfitting e o treino seguia alem do ponto util.
+# Com treino e validacao separados, `val_loss` volta a medir generalizacao e os
+# dois callbacks voltam a funcionar como pretendido.
 modelo_final = construir_modelo(
-    X_tv_n.shape[1], melhor_config["dropout"], melhor_config["lr"]
+    X_treino_n.shape[1], melhor_config["dropout"], melhor_config["lr"]
 )
 modelo_final.summary()
 
@@ -672,11 +680,11 @@ callbacks_final = [
 # interrompe antes, entao esta barra costuma terminar incompleta.
 with progress.bar(total=500) as _stage:
     historico = modelo_final.fit(
-        X_tv_n, Y_tv,
+        X_treino_n, Y_treino,
         epochs=500,
         batch_size=melhor_config["batch_size"],
         validation_data=(X_val_n, Y_val),
-        sample_weight=sw_tv,
+        sample_weight=sample_weights,
         callbacks=[*callbacks_final, progress.keras_callback(_stage)],
         verbose=0,
     )
@@ -691,7 +699,7 @@ print("\n[5/7] Avaliando o modelo...")
 
 pred_val   = modelo_final.predict(X_val_n,   verbose=0).flatten()
 pred_teste = modelo_final.predict(X_teste_n, verbose=0).flatten()
-pred_treino = modelo_final.predict(X_tv_n,   verbose=0).flatten()
+pred_treino = modelo_final.predict(X_treino_n, verbose=0).flatten()
 
 if LOG_ALVO:
     pred_val    = np.expm1(pred_val)
@@ -699,23 +707,23 @@ if LOG_ALVO:
     pred_treino = np.expm1(pred_treino)
     Y_val_met   = np.expm1(Y_val)
     y_teste_met = np.expm1(y_teste)
-    Y_tv_met    = np.expm1(Y_tv)
+    Y_treino_met = np.expm1(Y_treino)
     print("     Previsões revertidas para escala original.")
 else:
     Y_val_met   = Y_val
     y_teste_met = y_teste
-    Y_tv_met    = Y_tv
+    Y_treino_met = Y_treino
 
 met_val   = exibir_metricas(Y_val_met,   pred_val,   "Validação")
 met_teste = exibir_metricas(y_teste_met, pred_teste, "Teste Final")
 
-r2_treino_val = r2_score(Y_tv_met, pred_treino)
-print(f"\n  R² Treino+Val: {r2_treino_val:.4f}")
+r2_treino = r2_score(Y_treino_met, pred_treino)
+print(f"\n  R² Treino: {r2_treino:.4f}")
 print(f"  Em média, o modelo erra ±{met_teste['mae']:.2f} no valor de CBR")
 
 # Guarda o resultado do teste para o menu mostrar depois, sem treinar de novo.
 scoreboard.record("mlp", "Rede Neural — modelo único", met_teste,
-                  r2_treino_val=r2_treino_val)
+                  r2_treino_val=r2_treino)
 
 residuos_val   = Y_val_met   - pred_val
 residuos_teste = y_teste_met - pred_teste
@@ -740,9 +748,10 @@ ax1.plot(lim, lim, "--", color=PALETTE["laranja"], lw=1.5, label="Ideal")
 ax1.set_xlim(lim); ax1.set_ylim(lim)
 
 ax1.set_xlabel("Real"); ax1.set_ylabel("Previsto")
-ax1.legend(framealpha=0)
+ax1.legend()
 ax1.text(0.05, 0.92, f"R² = {met_val['r2']:.4f}", transform=ax1.transAxes,
-         fontsize=10, color=PALETTE["azul"], fontweight="bold")
+         fontsize=10, color=PALETTE["azul"], fontweight="bold",
+         bbox=dict(boxstyle="round,pad=0.35", facecolor="#FFFFFF", edgecolor="#E2E8F0", alpha=0.93))
 
 # B) Previsto vs Real — Teste
 ax2 = fig.add_subplot(gs[0, 1])
@@ -754,9 +763,10 @@ ax2.plot(lim2, lim2, "--", color=PALETTE["laranja"], lw=1.5, label="Ideal")
 ax2.set_xlim(lim2); ax2.set_ylim(lim2)
 
 ax2.set_xlabel("Real"); ax2.set_ylabel("Previsto")
-ax2.legend(framealpha=0)
+ax2.legend()
 ax2.text(0.05, 0.92, f"R² = {met_teste['r2']:.4f}", transform=ax2.transAxes,
-         fontsize=10, color=PALETTE["azul2"], fontweight="bold")
+         fontsize=10, color=PALETTE["azul2"], fontweight="bold",
+         bbox=dict(boxstyle="round,pad=0.35", facecolor="#FFFFFF", edgecolor="#E2E8F0", alpha=0.93))
 
 # C) Tabela de métricas
 ax3 = fig.add_subplot(gs[0, 2])
@@ -802,7 +812,7 @@ ax6.plot(historico.history["loss"],     label="MAE Treino",    color=PALETTE["az
 ax6.plot(historico.history["val_loss"], label="MAE Validação", color=PALETTE["laranja"], lw=1.5, linestyle="--")
 
 ax6.set_xlabel("Épocas"); ax6.set_ylabel("MAE")
-ax6.legend(framealpha=0)
+ax6.legend()
 plt.tight_layout(rect=[0, 0, 1, 0.97])
 
 # ── Figura 2: Distribuição dos resíduos ──────────────────────────────────────
@@ -818,7 +828,7 @@ for ax, res, titulo, cor in zip(
     ax.axvline(x=0, color=PALETTE["laranja"], linestyle="--", lw=1.5, label="Erro Zero")
 
     ax.set_xlabel("Erro (Real − Previsto)"); ax.set_ylabel("Frequência")
-    ax.legend(framealpha=0)
+    ax.legend()
 plt.tight_layout()
 
 # ── Figura 3: Histórico de MSE ────────────────────────────────────────────────
@@ -833,7 +843,7 @@ if "mse" in historico.history:
     ax7.plot(historico.history["val_mse"], label="MSE Validação", color=PALETTE["laranja"], lw=1.5, linestyle="--")
 
     ax7.set_xlabel("Épocas"); ax7.set_ylabel("MSE")
-    ax7.legend(framealpha=0)
+    ax7.legend()
     plt.tight_layout()
 
 # ── Figura 4: Busca de hiperparâmetros ───────────────────────────────────────
@@ -847,7 +857,7 @@ ax8.axhline(df_busca["mae_val"].iloc[0], color=PALETTE["laranja"], lw=1.5,
             linestyle="--", label=f"Melhor MAE = {df_busca['mae_val'].iloc[0]:.4f}")
 
 ax8.set_xlabel("Combinação (ranking)"); ax8.set_ylabel("MAE Validação")
-ax8.legend(framealpha=0)
+ax8.legend()
 plt.tight_layout()
 
 # As figuras 1–4 são montadas acima e ficam abertas ao mesmo tempo. Elas são
@@ -863,7 +873,7 @@ arquivos_gerados += plots.save(fig4, "busca_hiperparametros",  "mlp")
 grafico_data_leakage(historico)
 grafico_outliers(residuos_val, residuos_teste)
 grafico_early_stopping(historico, epocas_reais, PATIENCE_FINAL)
-grafico_r2_comparativo(r2_treino_val, met_val["r2"], met_teste["r2"])
+grafico_r2_comparativo(r2_treino, met_val["r2"], met_teste["r2"])
 grafico_raciocinio_rede(historico, epocas_reais)
 
 print(f"  Gráficos salvos em: {plots.figure_dir('mlp')}")
@@ -885,10 +895,10 @@ print("=" * 60)
 # modelo. Fica por último de propósito — é a linha que alguém lê ao voltar
 # ao terminal depois de um treino longo.
 notas = []
-if r2_treino_val < met_teste["r2"]:
+if r2_treino < met_teste["r2"]:
     # Treino pior que teste não acontece por acaso: ou a divisão dos dados pôs
     # os casos fáceis no teste, ou o alvo foi transformado de um lado só. Vale
     # o aviso antes de alguém confiar no R² de teste.
-    notas.append(f"R² de treino+validação ({r2_treino_val:.4f}) abaixo do R² de "
+    notas.append(f"R² de treino ({r2_treino:.4f}) abaixo do R² de "
                  "teste — verificar a divisão dos dados.")
 metrics.report(met_teste, notes=notas)

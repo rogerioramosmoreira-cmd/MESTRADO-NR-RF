@@ -1,0 +1,11 @@
+{
+  "key": "random_forest",
+  "label": "Árvore Aleatória — modelo único",
+  "split": "teste",
+  "recorded_at": "2026-08-29T15:46:35",
+  "r2": 0.8619500470971306,
+  "mae": 4.472094835160489,
+  "rmse": 7.6621817987800585,
+  "mse": 58.709029917556414,
+  "mape": 22.554082820892965
+}

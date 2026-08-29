@@ -36,7 +36,7 @@ from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 CODE_DIR  = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, CODE_DIR)
 
-from core import paths, plots  # noqa: E402
+from core import metrics, paths, plots  # noqa: E402
 
 # Mesma paleta, mesma grade e mesma ausência de títulos dos gráficos gerados
 # pelos scripts de treino — o dashboard e a dissertação mostram a mesma coisa.
@@ -64,7 +64,11 @@ SEED       = 42
 TEST_SIZE  = 0.20
 VAL_SIZE   = 0.15
 LOG_TARGET = True
-META_MSE   = 0.780
+# Meta declarada em R²: não depende da escala nem da faixa do alvo, e por isso
+# vale igual para o modelo global e para um quintil isolado (ver
+# core/metrics.py). O limiar de MSE equivalente muda com a variância de cada
+# conjunto, então não cabe como constante aqui.
+META_R2    = metrics.META_R2
 
 LIMITS = {
     "25.4mm":          (0.0,    100.0),
@@ -133,7 +137,7 @@ with st.sidebar:
         label_visibility="collapsed",
     )
     st.divider()
-    st.caption(f"Meta: MSE < {META_MSE}")
+    st.caption(f"Meta: R² >= {META_R2:.2f}")
 
 # ─────────────────────────────────────────────
 # FUNÇÕES COMPARTILHADAS
@@ -193,12 +197,10 @@ def exibir_metricas(met_val, met_test):
         cols = st.columns(5)
         for col, (k, v) in zip(cols, met_test.items()):
             fmt = f"{v:.2f}%" if k == "MAPE (%)" else f"{v:.4f}"
-            if k == "MSE":
-                ok = v < META_MSE
-                col.metric(k, fmt, delta="✓ Meta" if ok else "✗ Acima",
+            if k == "R²":
+                ok = v >= META_R2
+                col.metric(k, fmt, delta="✓ Meta" if ok else "✗ Abaixo",
                            delta_color="normal" if ok else "inverse")
-            elif k == "R²":
-                col.metric(k, fmt, delta=f"{v - met_val['R²']:+.4f}", delta_color="normal")
             else:
                 col.metric(k, fmt)
 
@@ -213,11 +215,12 @@ def plot_scatter(y_true, y_pred, titulo, cor):
                edgecolors="white", linewidths=0.4, s=40)
     ax.plot(lim, lim, "--", color=PALETTE["orange"], lw=1.5, label="Ideal")
     ax.text(0.05, 0.93, f"R² = {r2_score(y_true, y_pred):.4f}",
-            transform=ax.transAxes, fontsize=10, color=cor, fontweight="bold")
+            transform=ax.transAxes, fontsize=10, color=cor, fontweight="bold",
+            bbox=dict(boxstyle="round,pad=0.35", facecolor="#FFFFFF", edgecolor="#E2E8F0", alpha=0.93))
     ax.set_xlim(lim); ax.set_ylim(lim)
 
     ax.set_xlabel("Real (CBR %)"); ax.set_ylabel("Previsto (CBR %)")
-    ax.legend(framealpha=0)
+    ax.legend()
     plt.tight_layout()
     return fig
 
@@ -243,7 +246,7 @@ def plot_importancia(importancias, titulo):
     ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
     ax.barh(range(len(importancias)), importancias[idx], color=cores, edgecolor="white")
     ax.set_yticks(range(len(importancias)))
-    ax.set_yticklabels([FEATURES_LABELS[i] for i in idx], fontsize=9)
+    ax.set_yticklabels([FEATURES_LABELS[i] for i in idx], fontsize=10)
     ax.invert_yaxis()
 
     ax.set_xlabel("Importância (Gini)")
@@ -312,7 +315,7 @@ if pagina == "📊 Visão Geral":
                        label=f"Mediana = {cbr.median():.1f}%")
             ax.set_xlabel("CBR (%)"); ax.set_ylabel("Frequência")
 
-            ax.legend(framealpha=0)
+            ax.legend()
             plt.tight_layout()
             st.pyplot(fig, use_container_width=True)
             plt.close(fig)
@@ -427,12 +430,12 @@ elif pagina == "🌳 Resultados RF":
             bars2 = ax.bar(x + w/2, valores_en, w, label="RF EN", color=PALETTE["blue2"], edgecolor="white")
             ax.set_xticks(x); ax.set_xticklabels(metricas_list)
 
-            ax.legend(framealpha=0)
+            ax.legend()
             for bar in list(bars1) + list(bars2):
                 v = bar.get_height()
                 fmt = f"{v:.2f}%" if v > 10 else f"{v:.4f}"
                 ax.text(bar.get_x() + bar.get_width()/2, v + 0.005,
-                        fmt, ha="center", va="bottom", fontsize=7, fontweight="bold")
+                        fmt, ha="center", va="bottom", fontsize=9, fontweight="bold")
             plt.tight_layout()
             st.pyplot(fig, use_container_width=True); plt.close(fig)
 
@@ -514,13 +517,14 @@ elif pagina == "🔢 Quintis D1–D5":
                 ax.set_facecolor(PALETTE["bg"])
                 ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
                 bars = ax.bar(rots, [r["MSE"] for r in completos], color=cores, edgecolor="white", width=0.6)
-                ax.axhline(META_MSE, color=PALETTE["red"], lw=1.5, linestyle="--",
-                           label=f"Meta = {META_MSE}")
+                # Sem linha única de meta: o limiar de MSE equivalente a
+                # R² >= META_R2 muda de quintil para quintil, junto com a
+                # variância do CBR dentro de cada grupo.
                 for b, v in zip(bars, [r["MSE"] for r in completos]):
                     ax.text(b.get_x()+b.get_width()/2, b.get_height()+0.01,
-                            f"{v:.3f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+                            f"{v:.3f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
 
-                ax.set_ylabel("MSE"); ax.legend(framealpha=0)
+                ax.set_ylabel("MSE"); ax.legend()
                 plt.tight_layout()
                 st.pyplot(fig, use_container_width=True); plt.close(fig)
 
@@ -533,9 +537,9 @@ elif pagina == "🔢 Quintis D1–D5":
                 ax.axhline(0.0, color=PALETTE["red"], lw=0.8, linestyle=":", alpha=0.5)
                 for b, v in zip(bars2, [r["R²"] for r in completos]):
                     ax.text(b.get_x()+b.get_width()/2, max(v, 0)+0.01,
-                            f"{v:.3f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+                            f"{v:.3f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
 
-                ax.set_ylabel("R²"); ax.legend(framealpha=0)
+                ax.set_ylabel("R²"); ax.legend()
                 plt.tight_layout()
                 st.pyplot(fig, use_container_width=True); plt.close(fig)
 
@@ -555,7 +559,7 @@ elif pagina == "🔢 Quintis D1–D5":
             ax.plot(lim, lim, "--", color=PALETTE["orange"], lw=1.5, label="Ideal")
             ax.set_xlim(lim); ax.set_ylim(lim)
             ax.set_xlabel("Real (CBR %)"); ax.set_ylabel("Previsto (CBR %)")
-            ax.legend(framealpha=0.9, fontsize=9, facecolor=PALETTE["bg"])
+            ax.legend()
             plt.tight_layout()
             st.pyplot(fig, use_container_width=True); plt.close(fig)
         else:

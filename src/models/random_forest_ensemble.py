@@ -51,7 +51,8 @@ from sklearn.ensemble import (  # noqa: E402
     RandomForestRegressor,
     VotingRegressor,
 )
-from sklearn.model_selection import KFold, RandomizedSearchCV, train_test_split  # noqa: E402
+from sklearn.model_selection import (KFold, RandomizedSearchCV,  # noqa: E402
+                                     cross_val_predict, train_test_split)
 from sklearn.preprocessing import MinMaxScaler  # noqa: E402
 
 from core import (  # noqa: E402
@@ -69,14 +70,11 @@ VALIDATION_SIZE = 0.15
 SEARCH_ITERATIONS = runtime.budget(150, 15)
 CV_FOLDS = runtime.budget(10, 3)
 
-# ATENÇÃO — a meta de 0.780 vem do código original e está em escala ambígua.
-# As métricas abaixo são calculadas na escala real do CBR (%), onde o MSE
-# medido fica na casa das dezenas; 0.780 só é atingível na escala log1p, que é
-# onde a busca de hiperparâmetros reporta seu MSE de validação cruzada.
-# Comparar as duas faz a execução anunciar "meta não atingida" sempre.
-# Confirme qual escala a dissertação adota antes de citar este número.
-MSE_GOAL = 0.780
-MSE_GOAL_SCALE = "log1p"  # "log1p" ou "cbr" — define contra o que a meta é medida
+# A meta antiga era `MSE < 0.780` sem escala declarada, e este script
+# contornava o problema medindo em log1p — escala em que 0.780 já era batido
+# com muita folga e portanto não distinguia nada. Agora o critério é o R² na
+# escala real do CBR, que não depende de escala nenhuma (ver core/metrics.py).
+R2_GOAL = metrics.META_R2
 
 LOG_TARGET = True
 WEIGHT_THRESHOLD = 25.0
@@ -238,13 +236,13 @@ def chart_member_comparison(member_scores: dict, ensemble_scores):
     bars = axes.bar(labels, values, width=0.55, edgecolor="white",
                     color=[ESTIMATOR_COLORS[key] for key in keys])
 
-    # Sem linha de meta aqui: este eixo está na escala real do CBR e MSE_GOAL
-    # está em log1p. Desenhá-la colocaria a referência colada no zero, dando a
-    # impressão de que todos os modelos falharam por ordens de grandeza.
+    # Sem linha de meta aqui: a meta agora é um R², e este eixo mostra MSE por
+    # estimador. O limiar de MSE equivalente depende da variância do conjunto,
+    # e aparece no painel de resultado no fim do script.
 
     for bar, value in zip(bars, values):
         axes.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + max(values) * 0.02,
-                  f"{value:.3f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
+                  f"{value:.3f}", ha="center", va="bottom", fontsize=10, fontweight="bold")
 
     axes.set_ylabel("MSE no conjunto de teste")
 
@@ -259,7 +257,7 @@ def chart_member_comparison(member_scores: dict, ensemble_scores):
                "Ensemble venceu" if best == len(values) - 1
                else f"Ensemble não superou {labels[best]}",
                ESTIMATOR_COLORS["ensemble"])
-    plots.legend(axes, loc="upper center", fontsize=8)
+    plots.legend(axes, loc="upper center")
 
     return plots.save(figure, "comparativo_membros_mse", *FIGURE_FOLDER)
 
@@ -283,14 +281,14 @@ def chart_feature_importance(forest, extra_trees, feature_names, top_n: int = 15
     axes.barh(range(count), mean_importance[order], color=shades, edgecolor="white",
               label="Importância Gini média (RF + ExtraTrees)")
     axes.set_yticks(range(count))
-    axes.set_yticklabels([feature_names[index] for index in order], fontsize=9)
+    axes.set_yticklabels([feature_names[index] for index in order], fontsize=10)
     axes.invert_yaxis()
     axes.set_xlabel("Importância (Gini)")
 
     plots.note(axes,
                f"Mais influente: {feature_names[order[0]]} "
                f"({mean_importance[order[0]]:.3f})", PALETTE["ink"])
-    plots.legend(axes, loc="lower right", fontsize=8)
+    plots.legend(axes, loc="lower right")
 
     return plots.save(figure, "importancia_features", *FIGURE_FOLDER)
 
@@ -330,7 +328,7 @@ def chart_metrics_table(validation_scores, test_scores):
 def main() -> None:
     console.banner(
         "ENSEMBLE DE ÁRVORE ALEATÓRIA",
-        f"VotingRegressor (RF + Gradient Boosting + Extra Trees) — meta MSE < {MSE_GOAL}",
+        f"RF + Gradient Boosting + Extra Trees — meta R² >= {R2_GOAL:.2f}",
     )
     runtime.announce()
 
@@ -411,7 +409,26 @@ def main() -> None:
 
     raw_prediction_test = ensemble.predict(x_test_scaled)
 
-    prediction_validation = to_original_scale(ensemble.predict(x_validation_scaled))
+    # O ensemble foi ajustado em x_fit (treino+validação), então prever o
+    # conjunto de validação devolveria erro de treino disfarçado de erro de
+    # generalização (data leakage). A estimativa honesta vem do CV out-of-fold
+    # de um ensemble equivalente, ajustado só no treino.
+    ensemble_cv = VotingRegressor(estimators=[
+        (key, build_estimator(key, parameters))
+        for key, parameters in best_parameters.items()
+    ])
+    with progress.Tracker("Validação cruzada", total=1) as tracker:
+        with tracker.stage("VotingRegressor — out-of-fold",
+                           total=CV_FOLDS) as stage:
+            with progress.joblib_stage(stage):
+                raw_prediction_validation = cross_val_predict(
+                    ensemble_cv, x_train_scaled, y_train, cv=folds, n_jobs=-1,
+                    params={"sample_weight": sample_weights(y_train)},
+                )
+        tracker.advance_overall()
+
+    y_validation = y_train
+    prediction_validation = to_original_scale(raw_prediction_validation)
     prediction_test = to_original_scale(raw_prediction_test)
     y_validation_scale = to_original_scale(y_validation)
     y_test_scale = to_original_scale(y_test)
@@ -421,7 +438,7 @@ def main() -> None:
     mse_training_scale = float(np.mean((y_test - raw_prediction_test) ** 2))
 
     validation_scores = metrics.evaluate(y_validation_scale, prediction_validation,
-                                         "Ensemble — validação")
+                                         "Ensemble — validação CV")
     test_scores = metrics.evaluate(y_test_scale, prediction_test, "Ensemble — teste")
 
     # Os clones já ajustados que o ensemble guarda, não cópias reajustadas do
@@ -467,15 +484,15 @@ def main() -> None:
     dump({"features": feature_names, "log_target": LOG_TARGET},
          paths.RF_ENSEMBLE_DIR / "metadata.joblib")
 
-    measured = mse_training_scale if MSE_GOAL_SCALE == "log1p" else test_scores.mse
-    scale_label = "log1p(CBR)" if MSE_GOAL_SCALE == "log1p" else "CBR (%)"
-    goal_reached = measured < MSE_GOAL
+    goal_reached = test_scores.r2 >= R2_GOAL
+    goal_mse = metrics.meta_mse(y_test_scale)
 
     console.result_panel(
         "ENSEMBLE TREINADO" if goal_reached else "ENSEMBLE TREINADO — META NÃO ATINGIDA",
         [
-            f"MSE em {scale_label}: {measured:.4f} | meta < {MSE_GOAL}",
-            f"MSE na escala real do CBR: {test_scores.mse:.4f}",
+            f"R² {test_scores.r2:.4f} | meta >= {R2_GOAL:.2f}",
+            f"MSE na escala real do CBR: {test_scores.mse:.4f} "
+            f"| meta <= {goal_mse:.2f} nesta amostra",
             f"RMSE {test_scores.rmse:.4f} | MAE {test_scores.mae:.4f} | "
             f"R² {test_scores.r2:.4f}",
             "",

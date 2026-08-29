@@ -67,7 +67,7 @@ TASKS: list[Task] = [
          "Random Forest padrão sobre as 10 variáveis",
          SRC / "models" / "random_forest.py", "Modelos individuais"),
     Task("2", "Árvore Aleatória — alta performance (EN)",
-         "Busca de 150 iterações, 10-fold CV, meta MSE < 0.780",
+         "Busca de 150 iterações, 10-fold CV, meta R² >= 0.80",
          SRC / "models" / "random_forest_en.py", "Modelos individuais"),
     Task("3", "Árvore Aleatória — ensemble",
          "VotingRegressor: RF + Gradient Boosting + Extra Trees",

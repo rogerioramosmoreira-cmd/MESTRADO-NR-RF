@@ -1,6 +1,6 @@
 """
 Standard Random Forest Model — High Performance (English)
-Goal: MSE < 0.780 on the test set.
+Goal: R² >= 0.80 on the test set.
 
 Strategies:
   1. Feature engineering — 8 derived features from granulometric variables
@@ -21,7 +21,8 @@ import matplotlib.pyplot as plt
 
 from joblib import dump
 from sklearn.preprocessing import MinMaxScaler
-from sklearn.model_selection import train_test_split, RandomizedSearchCV, KFold
+from sklearn.model_selection import (train_test_split, RandomizedSearchCV, KFold,
+                                     cross_val_predict)
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import mean_squared_error, mean_absolute_error, r2_score
 from sklearn.pipeline import Pipeline as _Pipe
@@ -82,7 +83,11 @@ VAL_SIZE     = 0.15
 # The second value applies only with MLL_FAST=1 - see core/runtime.py.
 N_ITER_SEARCH = runtime.budget(150, 15)
 CV_FOLDS     = runtime.budget(10, 3)
-MSE_GOAL     = 0.780
+# Goal stated as R2 (see core/metrics.py). The equivalent MSE threshold
+# depends on the variance of the evaluated split, so it is only known after
+# the data is divided - it gets its real value in section 6.
+R2_GOAL      = core_metrics.META_R2
+MSE_GOAL     = float("inf")
 
 OUTPUT_DIR = paths.RF_EN_DIR
 paths.ensure(OUTPUT_DIR)
@@ -131,8 +136,13 @@ def metrics(y_true, y_pred, name):
     r2   = r2_score(y_true, y_pred)
     print(f"\n  [{name}]")
     print(f"    MSE  : {mse:.4f}")
-    if mse <= 1:
-        print(f"    WARNING: MSE={mse:.4f} <= 1 — check scale or data leakage.")
+    # A near-perfect R2 on real data almost always means the evaluated split
+    # leaked into training. The old threshold was a fixed MSE (<= 1), which
+    # fired exactly when the project goal was met; in R2 the check no longer
+    # depends on the scale of the target.
+    if r2 >= 0.99:
+        print(f"    WARNING: R²={r2:.4f} — too high for unseen data; "
+              "check scale or data leakage.")
     print(f"    RMSE : {rmse:.4f}")
     print(f"    MAE  : {mae:.4f}")
     print(f"    MAPE : {mape:.2f}%")
@@ -144,19 +154,20 @@ def metrics(y_true, y_pred, name):
 # CHART FUNCTIONS
 # ─────────────────────────────────────────────
 
-def plot_predicted_vs_actual_val(y_val, pred_val, met):
+def plot_predicted_vs_actual_val(y_cv, pred_cv, met):
     fig, ax = plt.subplots(figsize=(7, 6), facecolor=PALETTE["bg"])
     ax.set_facecolor(PALETTE["bg"])
     ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
-    lim = [min(y_val.min(), pred_val.min()) * 0.95, max(y_val.max(), pred_val.max()) * 1.05]
-    ax.scatter(y_val, pred_val, alpha=0.6, color=PALETTE["blue"], edgecolors="white", linewidths=0.4, s=50)
+    lim = [min(y_cv.min(), pred_cv.min()) * 0.95, max(y_cv.max(), pred_cv.max()) * 1.05]
+    ax.scatter(y_cv, pred_cv, alpha=0.6, color=PALETTE["blue"], edgecolors="white", linewidths=0.4, s=50)
     ax.plot(lim, lim, "--", color=PALETTE["orange"], lw=1.5, label="Ideal")
     ax.set_xlim(lim); ax.set_ylim(lim)
 
     ax.set_xlabel("Actual"); ax.set_ylabel("Predicted")
-    ax.legend(framealpha=0)
+    ax.legend()
     ax.text(0.05, 0.92, f"R² = {met['r2']:.4f}", transform=ax.transAxes,
-            fontsize=10, color=PALETTE["blue"], fontweight="bold")
+            fontsize=10, color=PALETTE["blue"], fontweight="bold",
+            bbox=dict(boxstyle="round,pad=0.35", facecolor="#FFFFFF", edgecolor="#E2E8F0", alpha=0.93))
     plt.tight_layout(); plots.save(plt.gcf(), "predicted_vs_actual_val", "random_forest_en")
 
 
@@ -170,25 +181,27 @@ def plot_predicted_vs_actual_test(y_test, pred_test, met):
     ax.set_xlim(lim); ax.set_ylim(lim)
 
     ax.set_xlabel("Actual"); ax.set_ylabel("Predicted")
-    ax.legend(framealpha=0)
+    ax.legend()
     ax.text(0.05, 0.92, f"R² = {met['r2']:.4f}", transform=ax.transAxes,
-            fontsize=10, color=PALETTE["blue2"], fontweight="bold")
-    cor = PALETTE["blue2"] if met["mse"] < MSE_GOAL else PALETTE["orange"]
+            fontsize=10, color=PALETTE["blue2"], fontweight="bold",
+            bbox=dict(boxstyle="round,pad=0.35", facecolor="#FFFFFF", edgecolor="#E2E8F0", alpha=0.93))
+    cor = PALETTE["blue2"] if met["r2"] >= R2_GOAL else PALETTE["orange"]
     ax.text(0.05, 0.83, f"MSE = {met['mse']:.4f}", transform=ax.transAxes,
-            fontsize=9, color=cor, fontweight="bold")
+            fontsize=10, color=cor, fontweight="bold",
+            bbox=dict(boxstyle="round,pad=0.35", facecolor="#FFFFFF", edgecolor="#E2E8F0", alpha=0.93))
     plt.tight_layout(); plots.save(plt.gcf(), "predicted_vs_actual_test", "random_forest_en")
 
 
-def plot_metrics_table(met_val, met_test):
+def plot_metrics_table(met_cv, met_test):
     fig, ax = plt.subplots(figsize=(6, 3.5), facecolor=PALETTE["bg"])
     ax.axis("off")
     table_data = [
-        ["Metric",  "Validation",              "Test"],
-        ["MSE",  f"{met_val['mse']:.4f}",  f"{met_test['mse']:.4f}"],
-        ["RMSE", f"{met_val['rmse']:.4f}", f"{met_test['rmse']:.4f}"],
-        ["MAE",  f"{met_val['mae']:.4f}",  f"{met_test['mae']:.4f}"],
-        ["MAPE", f"{met_val['mape']:.2f}%", f"{met_test['mape']:.2f}%"],
-        ["R²",   f"{met_val['r2']:.4f}",   f"{met_test['r2']:.4f}"],
+        ["Metric",  "CV Validation",           "Test"],
+        ["MSE",  f"{met_cv['mse']:.4f}",  f"{met_test['mse']:.4f}"],
+        ["RMSE", f"{met_cv['rmse']:.4f}", f"{met_test['rmse']:.4f}"],
+        ["MAE",  f"{met_cv['mae']:.4f}",  f"{met_test['mae']:.4f}"],
+        ["MAPE", f"{met_cv['mape']:.2f}%", f"{met_test['mape']:.2f}%"],
+        ["R²",   f"{met_cv['r2']:.4f}",   f"{met_test['r2']:.4f}"],
     ]
     tbl = ax.table(cellText=table_data[1:], colLabels=table_data[0],
                    cellLoc="center", loc="center", bbox=[0.05, 0.05, 0.9, 0.85])
@@ -204,10 +217,10 @@ def plot_metrics_table(met_val, met_test):
     plt.tight_layout(); plots.save(plt.gcf(), "metrics_table", "random_forest_en")
 
 
-def plot_residuals_val(y_val, pred_val):
+def plot_residuals_val(y_cv, pred_cv):
     fig, ax = plt.subplots(figsize=(7, 5), facecolor=PALETTE["bg"])
     ax.set_facecolor(PALETTE["bg"]); ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
-    ax.scatter(pred_val, y_val - pred_val, alpha=0.6, color=PALETTE["blue"], edgecolors="white", linewidths=0.4, s=50)
+    ax.scatter(pred_cv, y_cv - pred_cv, alpha=0.6, color=PALETTE["blue"], edgecolors="white", linewidths=0.4, s=50)
     ax.axhline(0, color=PALETTE["orange"], lw=1.5, linestyle="--")
 
     ax.set_xlabel("Predicted"); ax.set_ylabel("Residual (Actual − Predicted)")
@@ -236,7 +249,7 @@ def plot_feature_importance(rf_model, feature_names):
 
     ax.barh(range(top_n), imp[idx], color=colors, edgecolor="white")
     ax.set_yticks(range(top_n))
-    ax.set_yticklabels([FEATURES_LABELS[i] for i in idx], fontsize=9)
+    ax.set_yticklabels([FEATURES_LABELS[i] for i in idx], fontsize=10)
     ax.invert_yaxis()
 
     ax.set_xlabel("Importance (Gini)")
@@ -268,7 +281,7 @@ def plot_search_reasoning(search_rf):
         for i in improvements[:6]:
             ax1.annotate(f"it.{i+1}\n{mse_min[i]:.3f}", xy=(i + 1, mse_min[i]),
                          xytext=(i + 1 + n_iter * 0.02, mse_min[i] * 1.01),
-                         fontsize=7, color=PALETTE["orange"])
+                         fontsize=9, color=PALETTE["orange"])
 
     best_idx = int(np.argmin(mse_iter))
     ax1.axhline(mse_min[-1], color=PALETTE["green"], lw=1.2, linestyle="--",
@@ -277,7 +290,7 @@ def plot_search_reasoning(search_rf):
                 label=f"Best iteration: {best_idx + 1}")
     ax1.set_ylabel("MSE CV (cumulative min)")
 
-    ax1.legend(framealpha=0, fontsize=9)
+    ax1.legend()
 
     ax2 = axes[1]
     ax2.set_facecolor(PALETTE["bg"]); ax2.spines["top"].set_visible(False); ax2.spines["right"].set_visible(False)
@@ -289,7 +302,7 @@ def plot_search_reasoning(search_rf):
         if delta[ig] < 0:
             ax2.annotate(f"−{abs(delta[ig]):.3f}", xy=(iters[1:][ig], delta[ig]),
                          xytext=(iters[1:][ig], delta[ig] * 1.3),
-                         ha="center", fontsize=7, color=PALETTE["green"], fontweight="bold")
+                         ha="center", fontsize=9, color=PALETTE["green"], fontweight="bold")
     ax2.set_xlabel("Search Iteration"); ax2.set_ylabel("ΔMSE (negative = improvement)")
 
     plt.tight_layout(); plots.save(plt.gcf(), "search_reasoning", "random_forest_en")
@@ -327,7 +340,7 @@ def plot_oob_convergence(rf_optimized, X_tv_n, Y_tv):
     ax.scatter([knee_n], [oob_arr[knee_idx]], color=PALETTE["orange"], s=80, zorder=5)
     ax.axvspan(knee_n, steps[-1], alpha=0.06, color=PALETTE["red"], label="Diminishing returns")
     ax.set_xlabel("Number of Trees"); ax.set_ylabel("OOB Error (1 − R²)")
-    ax.legend(framealpha=0)
+    ax.legend()
 
     ax2 = axes[1]
     ax2.set_facecolor(PALETTE["bg"]); ax2.spines["top"].set_visible(False); ax2.spines["right"].set_visible(False)
@@ -338,7 +351,7 @@ def plot_oob_convergence(rf_optimized, X_tv_n, Y_tv):
                 label=f"Elbow (group {knee_idx})")
     ax2.set_xlabel("Tree Group"); ax2.set_ylabel("Marginal Gain (−ΔOOB)")
 
-    ax2.legend(framealpha=0)
+    ax2.legend()
     plt.tight_layout(); plots.save(plt.gcf(), "oob_convergence", "random_forest_en")
 
 
@@ -359,7 +372,7 @@ def plot_cv_distribution(search_rf):
                label=f"Median = {np.median(mse_all):.4f}")
     ax.set_xlabel("MSE CV"); ax.set_ylabel("Frequency")
 
-    ax.legend(framealpha=0)
+    ax.legend()
 
     ax2 = axes[1]
     ax2.set_facecolor(PALETTE["bg"]); ax2.spines["top"].set_visible(False); ax2.spines["right"].set_visible(False)
@@ -368,13 +381,14 @@ def plot_cv_distribution(search_rf):
     bar_colors = [PALETTE["orange"] if i == 0 else PALETTE["blue"] for i in range(len(top_idx))]
     bars = ax2.bar(range(len(top_idx)), top_mse, color=bar_colors, edgecolor="white", alpha=0.85)
     ax2.errorbar(range(len(top_idx)), top_mse, yerr=top_std, fmt="none", color="#374151", capsize=3, lw=1.0)
-    ax2.axhline(MSE_GOAL, color="red", lw=1.2, linestyle="--", label=f"MSE Goal = {MSE_GOAL}")
+    # No goal line here: this axis shows the search MSE, which is on the log1p
+    # scale, while the goal lives on the original CBR scale.
     for bar, val in zip(bars, top_mse):
         ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005,
-                 f"{val:.3f}", ha="center", va="bottom", fontsize=7, fontweight="bold")
+                 f"{val:.3f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
 
     ax2.set_xlabel("Ranking"); ax2.set_ylabel("MSE CV")
-    ax2.legend(framealpha=0)
+    ax2.legend()
     plt.tight_layout(); plots.save(plt.gcf(), "cv_distribution", "random_forest_en")
 
 
@@ -383,7 +397,7 @@ def plot_cv_distribution(search_rf):
 # ─────────────────────────────────────────────
 print("=" * 60)
 print("  RANDOM FOREST — STANDARD MODEL — HIGH PERFORMANCE")
-print(f"  GOAL: MSE < {MSE_GOAL}")
+print(f"  GOAL: R² >= {R2_GOAL:.2f} on the test set")
 print("=" * 60)
 print("\n[1/6] Loading data...")
 
@@ -472,7 +486,11 @@ with progress.bar(total=N_ITER_SEARCH * CV_FOLDS) as _stage:
                       rf__sample_weight=sample_weights)
 
 best_params = {k.replace("rf__", ""): v for k, v in search_rf.best_params_.items()}
-print(f"     Best CV MSE: {-search_rf.best_score_:.4f}")
+# Score in log1p scale when LOG_TARGET is on, so NOT comparable to MSE_GOAL,
+# which lives in the original CBR scale. The comparable figure is the
+# out-of-fold CV metric computed in section 6.
+_scale_note = " (log1p scale - not comparable to the goal)" if LOG_TARGET else ""
+print(f"     Best CV MSE: {-search_rf.best_score_:.4f}{_scale_note}")
 print(f"     Best params: {best_params}")
 
 # ─────────────────────────────────────────────
@@ -499,27 +517,52 @@ print("     Model trained on train + validation.")
 # ─────────────────────────────────────────────
 print("\n[6/6] Evaluating model...")
 
-pred_val  = rf_final.predict(X_val_n)
+# -- Generalization estimate: out-of-fold cross-validation -------------------
+#
+# The previous version measured "validation" with rf_final.predict(X_val_n).
+# Since rf_final is trained on train+validation (X_tv), the validation set had
+# already been seen: that metric was training error dressed up as
+# generalization error - optimistic by construction (data leakage).
+#
+# Here the estimate comes from CV with the best configuration, fitted ONLY on
+# the training set, so every prediction is made by a model that never saw that
+# sample.
+print(f"     Out-of-fold cross-validation ({CV_FOLDS} folds)...")
+
+rf_cv     = RandomForestRegressor(**best_params, random_state=SEED, n_jobs=-1)
+params_cv = {"sample_weight": sample_weights} if sample_weights is not None else None
+
+with progress.bar(total=CV_FOLDS) as _stage:
+    with progress.joblib_stage(_stage):
+        pred_cv = cross_val_predict(rf_cv, X_train_n, Y_train,
+                                    cv=kf, n_jobs=-1, params=params_cv)
+
 pred_test = rf_final.predict(X_test_n)
 
 if LOG_TARGET:
-    pred_val   = np.expm1(pred_val)
+    pred_cv    = np.expm1(pred_cv)
     pred_test  = np.expm1(pred_test)
-    Y_val_met  = np.expm1(Y_val)
+    Y_cv_met   = np.expm1(Y_train)
     y_test_met = np.expm1(y_test)
     print("     Predictions reverted to original scale (expm1).")
 else:
-    Y_val_met  = Y_val
+    Y_cv_met   = Y_train
     y_test_met = y_test
 
-met_val  = metrics(Y_val_met,  pred_val,  "Validation  — Random Forest")
+# MSE threshold equivalent to R2_GOAL given the real test-set variance.
+MSE_GOAL = core_metrics.meta_mse(y_test_met)
+print(f"     Goal: R² >= {R2_GOAL:.2f}  (MSE <= {MSE_GOAL:.2f} on this sample)")
+
+met_cv   = metrics(Y_cv_met,   pred_cv,   "CV Validation — Random Forest")
 met_test = metrics(y_test_met, pred_test, "Final Test   — Random Forest")
 
 print("\n" + "=" * 60)
-if met_test["mse"] < MSE_GOAL:
-    print(f"  GOAL REACHED! MSE = {met_test['mse']:.4f} < {MSE_GOAL}")
+if met_test["r2"] >= R2_GOAL:
+    print(f"  GOAL REACHED! R² = {met_test['r2']:.4f} >= {R2_GOAL:.2f}"
+          f"  (MSE {met_test['mse']:.2f} <= {MSE_GOAL:.2f})")
 else:
-    print(f"  MSE = {met_test['mse']:.4f}  |  Goal: < {MSE_GOAL}")
+    print(f"  R² = {met_test['r2']:.4f}  |  Goal: >= {R2_GOAL:.2f}"
+          f"  (MSE {met_test['mse']:.2f}  |  Goal: <= {MSE_GOAL:.2f})")
 print("=" * 60)
 
 # Guarda o resultado do teste para o menu mostrar depois, sem treinar de novo.
@@ -531,10 +574,10 @@ scoreboard.record("random_forest_en",
 # ─────────────────────────────────────────────
 print("\n--- Generating Charts ---")
 
-plot_predicted_vs_actual_val(Y_val_met, pred_val, met_val)
+plot_predicted_vs_actual_val(Y_cv_met, pred_cv, met_cv)
 plot_predicted_vs_actual_test(y_test_met, pred_test, met_test)
-plot_metrics_table(met_val, met_test)
-plot_residuals_val(Y_val_met, pred_val)
+plot_metrics_table(met_cv, met_test)
+plot_residuals_val(Y_cv_met, pred_cv)
 plot_residuals_test(y_test_met, pred_test)
 plot_feature_importance(rf_final, feature_names)
 plot_cv_distribution(search_rf)

@@ -31,7 +31,8 @@ dependencies.require("core")
 import numpy as np  # noqa: E402
 from joblib import dump  # noqa: E402
 from sklearn.ensemble import RandomForestRegressor  # noqa: E402
-from sklearn.model_selection import KFold, RandomizedSearchCV, train_test_split  # noqa: E402
+from sklearn.model_selection import (KFold, RandomizedSearchCV,  # noqa: E402
+                                     cross_val_predict, train_test_split)
 from sklearn.preprocessing import MinMaxScaler  # noqa: E402
 
 from core import (  # noqa: E402
@@ -108,12 +109,14 @@ def train_subset(frame, subset: Subset, tracker: progress.Tracker) -> SubsetResu
         f"teste {x_test.shape[0]} | variáveis {x_train.shape[1]}"
     )
 
+    folds = KFold(n_splits=CV_FOLDS, shuffle=True, random_state=SEED)
+
     search = RandomizedSearchCV(
         RandomForestRegressor(random_state=SEED, n_jobs=-1),
         SEARCH_SPACE,
         n_iter=SEARCH_ITERATIONS,
         scoring="neg_mean_squared_error",
-        cv=KFold(n_splits=CV_FOLDS, shuffle=True, random_state=SEED),
+        cv=folds,
         random_state=SEED,
         n_jobs=-1,
         verbose=0,
@@ -136,7 +139,22 @@ def train_subset(frame, subset: Subset, tracker: progress.Tracker) -> SubsetResu
         with progress.joblib_stage(stage):
             forest.fit(x_fit_scaled, y_fit, sample_weight=sample_weights(y_fit))
 
-    prediction_validation = forest.predict(x_validation_scaled)
+    # `forest` foi ajustado em x_fit (treino+validação), então prever o conjunto
+    # de validação devolveria erro de treino, não de generalização — otimista por
+    # construção (data leakage). A estimativa honesta vem do CV out-of-fold com
+    # a melhor configuração, ajustada só no treino: cada previsão vem de um
+    # modelo que nunca viu aquela linha.
+    forest_cv = RandomForestRegressor(**search.best_params_, random_state=SEED,
+                                      n_jobs=-1)
+    with tracker.stage(f"{subset.key.upper()} — validação cruzada",
+                       total=CV_FOLDS) as stage:
+        with progress.joblib_stage(stage):
+            prediction_validation = cross_val_predict(
+                forest_cv, x_train_scaled, y_train, cv=folds, n_jobs=-1,
+                params={"sample_weight": sample_weights(y_train)},
+            )
+    y_validation = y_train
+
     prediction_test = forest.predict(x_test_scaled)
 
     # As métricas são sempre reportadas na escala original do CBR, nunca em

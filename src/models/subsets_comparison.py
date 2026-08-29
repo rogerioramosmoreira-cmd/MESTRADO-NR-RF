@@ -90,7 +90,7 @@ def chart_metric_by_model(loaded: dict[str, dict], keys: list[str],
                             color=MODEL_COLORS[model], edgecolor="white",
                             alpha=0.9, label=MODEL_LABELS[model])
             plots.value_labels(axes, bars, values, fmt="{:.3f}",
-                               fontsize=8, fontweight="normal", clip=broken)
+                               fontsize=9.5, fontweight="normal", clip=broken)
 
         axes.set_xticks(positions)
         # Sigla no tick, nome completo no rodapé: rótulo longo e inclinado no
@@ -111,7 +111,7 @@ def chart_metric_by_model(loaded: dict[str, dict], keys: list[str],
         lines_extra = []
 
     # Legenda dos modelos só uma vez, mesmo com dois painéis.
-    plots.legend(panels[0], loc="upper right", fontsize=9)
+    plots.legend(panels[0], loc="upper right")
 
     winners = []
     for key in keys:
@@ -165,7 +165,7 @@ def chart_model_difference(loaded: dict[str, dict], keys: list[str]) -> list[Pat
     # Folga acima e abaixo para os rótulos de valor, que ficam do lado de fora
     # da barra e encostariam na borda do eixo.
     axes.set_ylim(min(differences) - span * 0.25, max(differences) + span * 0.32)
-    plots.legend(axes, loc="upper right", fontsize=9)
+    plots.legend(axes, loc="upper right")
 
     lines = [f"{SUBSETS[key].name}: {SUBSETS[key].description}" for key in keys]
     lines.append("Barra negativa: Árvore Aleatória tem menor erro   |   "
@@ -212,8 +212,9 @@ def chart_paired_predictions(loaded: dict[str, dict],
         # da legenda ela empurrava a caixa sobre a nuvem de pontos.
         panel.text(0.0, 1.02, SUBSETS[key].name, transform=panel.transAxes,
                    fontsize=10, fontweight="bold", color=SUBSET_COLORS[key],
-                   ha="left", va="bottom")
-        plots.legend(panel, loc="lower right", fontsize=7)
+                   ha="left", va="bottom",
+                   bbox=dict(boxstyle="round,pad=0.35", facecolor="#FFFFFF", edgecolor="#E2E8F0", alpha=0.93))
+        plots.legend(panel, loc="lower right")
 
     for unused in panels[len(keys):]:
         unused.axis("off")

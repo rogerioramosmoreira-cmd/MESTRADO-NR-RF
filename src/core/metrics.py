@@ -58,6 +58,47 @@ class Scores:
 HEADERS = ["Conjunto", "MSE", "RMSE", "MAE", "MAPE", "R²"]
 
 
+# ── Meta de desempenho ──────────────────────────────────────────────
+#
+# A meta do projeto era `MSE < 0.780`, um número solto, sem escala declarada.
+# Na escala real do CBR ele exige RMSE de 0.88 ponto num alvo que vai de 1.9 a
+# 117.8 — ou seja, R² = 0.998, inalcançável. Na escala log1p, em que os modelos
+# treinam, o mesmo 0.780 já era superado com dez vezes de folga, e portanto
+# não distinguia nada. A própria função de métricas denunciava a contradição:
+# avisava "MSE <= 1 — verifique escala ou data leakage" exatamente quando a
+# meta fosse atingida.
+#
+# A meta agora é declarada em R², que não depende da escala nem da faixa do
+# alvo, e o limiar de MSE é derivado da variância do conjunto avaliado. Assim o
+# mesmo critério vale para o modelo global e para um quintil isolado, onde a
+# variância é muito menor e um MSE fixo não significaria a mesma coisa.
+META_R2 = 0.80
+
+
+def meta_mse(y_true) -> float:
+    """
+    MSE máximo compatível com `META_R2` no conjunto recebido.
+
+    R² = 1 − MSE/var(y), então MSE = (1 − R²) · var(y). Recebe `y_true` na
+    escala em que a métrica será reportada — a original do CBR, nunca log1p.
+    """
+    return float((1.0 - META_R2) * np.var(np.asarray(y_true, dtype=float)))
+
+
+def meta_atingida(scores_ou_mse, y_true=None) -> bool:
+    """
+    Diz se a meta foi cumprida. Aceita um `Scores` (usa o R² direto) ou um MSE
+    solto acompanhado do `y_true` de onde ele saiu.
+    """
+    if hasattr(scores_ou_mse, "r2"):
+        return scores_ou_mse.r2 >= META_R2
+    if isinstance(scores_ou_mse, dict):
+        return float(scores_ou_mse["r2"]) >= META_R2
+    if y_true is None:
+        raise ValueError("meta_atingida precisa de y_true para um MSE solto")
+    return float(scores_ou_mse) <= meta_mse(y_true)
+
+
 def evaluate(y_true, y_pred, name: str) -> Scores:
     """Calcula MSE, RMSE, MAE, MAPE e R² para um conjunto de previsões."""
     y_true = np.asarray(y_true, dtype=float).ravel()

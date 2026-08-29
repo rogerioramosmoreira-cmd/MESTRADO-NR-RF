@@ -1,13 +1,15 @@
 """
 Modelo Random Forest — Alta Performance (Modelo Único)
-Meta: MSE < 0.780 no conjunto de teste.
+Meta: R² >= 0.80 no conjunto de teste.
 
 Estratégias aplicadas:
   1. RandomForestRegressor único com busca extensa de hiperparâmetros
   2. Busca — 150 iterações, 10-fold CV, scoring=neg_MSE
   3. Retreino no conjunto treino+validação após o ajuste
+  3b. Generalização medida por CV out-of-fold no treino — nunca prevendo
+      dados que o modelo final já viu (evita data leakage otimista)
   4. Métricas completas: MSE, RMSE, MAE, R²
-  5. Alerta se MSE <= 1
+  5. Alerta se R² >= 0.99 (sinal de vazamento)
   6. Transformação logarítmica no alvo (log1p/expm1)
   7. Pesos amostrais — amostras raras com CBR alto recebem maior peso
   8. Gráficos de raciocínio do modelo durante a busca e convergência OOB
@@ -29,6 +31,7 @@ from sklearn.model_selection import (
     train_test_split,
     RandomizedSearchCV,
     KFold,
+    cross_val_predict,
 )
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.metrics import (
@@ -94,7 +97,11 @@ VAL_SIZE     = 0.15
 # O segundo valor vale apenas com MLL_FAST=1 - ver core/runtime.py.
 N_ITER_BUSCA = runtime.budget(150, 15)
 CV_FOLDS     = runtime.budget(10, 3)
-META_MSE     = 0.780
+# Meta declarada em R² (ver core/metrics.py). O limiar equivalente de MSE
+# depende da variância do conjunto avaliado, então só pode ser calculado
+# depois da divisão dos dados — recebe o valor real na seção 6.
+META_R2      = metrics.META_R2
+META_MSE     = float("inf")
 
 OUTPUT_DIR = paths.RF_DIR
 paths.ensure(OUTPUT_DIR)
@@ -146,8 +153,13 @@ def metricas(y_true, y_pred, nome):
     mape  = np.mean(np.abs((y_true - y_pred) / (np.abs(y_true) + 1e-6))) * 100
     print(f"\n  [{nome}]")
     print(f"    MSE  : {mse:.4f}")
-    if mse <= 1:
-        print(f"    ATENÇÃO: MSE={mse:.4f} <= 1 — verifique escala ou data leakage.")
+    # Um R² quase perfeito em dados de verdade quase sempre significa que o
+    # conjunto avaliado vazou para o treino. O limiar antigo era um MSE fixo
+    # (<= 1), que disparava exatamente quando a meta do projeto fosse
+    # atingida; em R² o alerta independe da escala do alvo.
+    if r2 >= 0.99:
+        print(f"    ATENÇÃO: R²={r2:.4f} — alto demais para dados novos; "
+              "verifique escala ou data leakage.")
     print(f"    RMSE : {rmse:.4f}")
     print(f"    MAE  : {mae:.4f}")
     print(f"    MAPE : {mape:.2f}%")
@@ -159,22 +171,23 @@ def metricas(y_true, y_pred, nome):
 # FUNÇÕES DE GRÁFICO
 # ─────────────────────────────────────────────
 
-def grafico_previsto_vs_real_validacao(Y_val, pred_val, met_val):
-    """Dispersão previsto × real — Validação."""
+def grafico_previsto_vs_real_validacao(Y_cv, pred_cv, met_cv):
+    """Dispersão previsto × real — Validação cruzada (out-of-fold)."""
     fig, ax = plt.subplots(figsize=(7, 6), facecolor=PALETTE["fundo"])
     ax.set_facecolor(PALETTE["fundo"])
     ax.spines["top"].set_visible(False); ax.spines["right"].set_visible(False)
-    lim = [min(Y_val.min(), pred_val.min()) * 0.95,
-           max(Y_val.max(), pred_val.max()) * 1.05]
-    ax.scatter(Y_val, pred_val, alpha=0.6, color=PALETTE["azul"],
+    lim = [min(Y_cv.min(), pred_cv.min()) * 0.95,
+           max(Y_cv.max(), pred_cv.max()) * 1.05]
+    ax.scatter(Y_cv, pred_cv, alpha=0.6, color=PALETTE["azul"],
                edgecolors="white", linewidths=0.4, s=50)
     ax.plot(lim, lim, "--", color=PALETTE["laranja"], lw=1.5, label="Ideal")
     ax.set_xlim(lim); ax.set_ylim(lim)
 
     ax.set_xlabel("Real"); ax.set_ylabel("Previsto")
-    ax.legend(framealpha=0)
-    ax.text(0.05, 0.92, f"R² = {met_val['r2']:.4f}", transform=ax.transAxes,
-            fontsize=10, color=PALETTE["azul"], fontweight="bold")
+    ax.legend()
+    ax.text(0.05, 0.92, f"R² = {met_cv['r2']:.4f}", transform=ax.transAxes,
+            fontsize=10, color=PALETTE["azul"], fontweight="bold",
+            bbox=dict(boxstyle="round,pad=0.35", facecolor="#FFFFFF", edgecolor="#E2E8F0", alpha=0.93))
     plt.tight_layout(); plots.save(plt.gcf(), "previsto_vs_real_validacao", "random_forest")
 
 
@@ -191,26 +204,28 @@ def grafico_previsto_vs_real_teste(y_teste, pred_teste, met_teste):
     ax.set_xlim(lim); ax.set_ylim(lim)
 
     ax.set_xlabel("Real"); ax.set_ylabel("Previsto")
-    ax.legend(framealpha=0)
+    ax.legend()
     ax.text(0.05, 0.92, f"R² = {met_teste['r2']:.4f}", transform=ax.transAxes,
-            fontsize=10, color=PALETTE["azul2"], fontweight="bold")
-    cor_meta = PALETTE["azul2"] if met_teste["mse"] < META_MSE else PALETTE["laranja"]
+            fontsize=10, color=PALETTE["azul2"], fontweight="bold",
+            bbox=dict(boxstyle="round,pad=0.35", facecolor="#FFFFFF", edgecolor="#E2E8F0", alpha=0.93))
+    cor_meta = PALETTE["azul2"] if met_teste["r2"] >= META_R2 else PALETTE["laranja"]
     ax.text(0.05, 0.83, f"MSE = {met_teste['mse']:.4f}", transform=ax.transAxes,
-            fontsize=9, color=cor_meta, fontweight="bold")
+            fontsize=10, color=cor_meta, fontweight="bold",
+            bbox=dict(boxstyle="round,pad=0.35", facecolor="#FFFFFF", edgecolor="#E2E8F0", alpha=0.93))
     plt.tight_layout(); plots.save(plt.gcf(), "previsto_vs_real_teste", "random_forest")
 
 
-def grafico_tabela_metricas(met_val, met_teste):
+def grafico_tabela_metricas(met_cv, met_teste):
     """Tabela comparativa de métricas."""
     fig, ax = plt.subplots(figsize=(6, 3.5), facecolor=PALETTE["fundo"])
     ax.axis("off")
     table_data = [
-        ["Métrica", "Validação", "Teste"],
-        ["MSE",  f"{met_val['mse']:.4f}",  f"{met_teste['mse']:.4f}"],
-        ["RMSE", f"{met_val['rmse']:.4f}", f"{met_teste['rmse']:.4f}"],
-        ["MAE",  f"{met_val['mae']:.4f}",  f"{met_teste['mae']:.4f}"],
-        ["MAPE", f"{met_val['mape']:.2f}%", f"{met_teste['mape']:.2f}%"],
-        ["R²",   f"{met_val['r2']:.4f}",   f"{met_teste['r2']:.4f}"],
+        ["Métrica", "Validação CV", "Teste"],
+        ["MSE",  f"{met_cv['mse']:.4f}",  f"{met_teste['mse']:.4f}"],
+        ["RMSE", f"{met_cv['rmse']:.4f}", f"{met_teste['rmse']:.4f}"],
+        ["MAE",  f"{met_cv['mae']:.4f}",  f"{met_teste['mae']:.4f}"],
+        ["MAPE", f"{met_cv['mape']:.2f}%", f"{met_teste['mape']:.2f}%"],
+        ["R²",   f"{met_cv['r2']:.4f}",   f"{met_teste['r2']:.4f}"],
     ]
     tbl = ax.table(cellText=table_data[1:], colLabels=table_data[0],
                    cellLoc="center", loc="center", bbox=[0.05, 0.1, 0.9, 0.8])
@@ -226,12 +241,12 @@ def grafico_tabela_metricas(met_val, met_teste):
     plt.tight_layout(); plots.save(plt.gcf(), "tabela_metricas", "random_forest")
 
 
-def grafico_residuos_validacao(Y_val, pred_val):
-    """Resíduos — Validação."""
+def grafico_residuos_validacao(Y_cv, pred_cv):
+    """Resíduos — Validação cruzada (out-of-fold)."""
     fig, ax = plt.subplots(figsize=(7, 5), facecolor=PALETTE["fundo"])
     ax.set_facecolor(PALETTE["fundo"]); ax.spines["top"].set_visible(False)
     ax.spines["right"].set_visible(False)
-    ax.scatter(pred_val, Y_val - pred_val, alpha=0.6, color=PALETTE["azul"],
+    ax.scatter(pred_cv, Y_cv - pred_cv, alpha=0.6, color=PALETTE["azul"],
                edgecolors="white", linewidths=0.4, s=50)
     ax.axhline(0, color=PALETTE["laranja"], lw=1.5, linestyle="--")
 
@@ -268,7 +283,7 @@ def grafico_importancia_features(rf_modelo, feature_names):
 
     ax.barh(range(top_n), importancias[idx], color=cores, edgecolor="white")
     ax.set_yticks(range(top_n))
-    ax.set_yticklabels([FEATURES_LABELS[i] for i in idx], fontsize=9)
+    ax.set_yticklabels([FEATURES_LABELS[i] for i in idx], fontsize=10)
     ax.invert_yaxis()
 
     ax.set_xlabel("Importância (Gini)")
@@ -318,7 +333,7 @@ def grafico_raciocinio_rf(search_rf):
             ax1.annotate(f"it.{i+1}\n{mse_min_acum[i]:.3f}",
                          xy=(i + 1, mse_min_acum[i]),
                          xytext=(i + 1 + n_iter * 0.02, mse_min_acum[i] * 1.01),
-                         fontsize=7, color=PALETTE["laranja"])
+                         fontsize=9, color=PALETTE["laranja"])
 
     # Linha da melhor configuração final
     melhor_idx = int(np.argmin(mse_iter))
@@ -330,7 +345,7 @@ def grafico_raciocinio_rf(search_rf):
 
     ax1.set_ylabel("MSE CV (mínimo acumulado)")
 
-    ax1.legend(framealpha=0, fontsize=9)
+    ax1.legend()
 
     # ── Painel inferior: ΔMSE por iteração ───────────────────────────────────
     ax2 = axes[1]
@@ -348,7 +363,7 @@ def grafico_raciocinio_rf(search_rf):
             ax2.annotate(f"−{abs(delta[idx_g]):.3f}",
                          xy=(iters[1:][idx_g], delta[idx_g]),
                          xytext=(iters[1:][idx_g], delta[idx_g] * 1.3),
-                         ha="center", fontsize=7, color=PALETTE["verde"],
+                         ha="center", fontsize=9, color=PALETTE["verde"],
                          fontweight="bold")
 
     ax2.set_xlabel("Iteração da Busca")
@@ -408,7 +423,7 @@ def grafico_convergencia_oob(rf_otimizado, X_tv_n, Y_tv):
                label="Retorno decrescente")
     ax.set_xlabel("Número de Árvores"); ax.set_ylabel("Erro OOB (1 − R²)")
 
-    ax.legend(framealpha=0)
+    ax.legend()
 
     # Painel direito: ganho marginal
     ax2 = axes[1]
@@ -422,7 +437,7 @@ def grafico_convergencia_oob(rf_otimizado, X_tv_n, Y_tv):
     ax2.set_xlabel("Grupo de Árvores Adicionadas")
     ax2.set_ylabel("Ganho Marginal (−ΔOOB)")
 
-    ax2.legend(framealpha=0)
+    ax2.legend()
 
     plt.tight_layout()
     plots.save(plt.gcf(), "convergencia_oob", "random_forest")
@@ -456,7 +471,7 @@ def grafico_distribuicao_cv(search_rf):
                label=f"Mediana = {np.median(mse_todas):.4f}")
     ax.set_xlabel("MSE CV"); ax.set_ylabel("Frequência")
 
-    ax.legend(framealpha=0)
+    ax.legend()
 
     # Painel direito: top 15 configurações (barras com barra de erro)
     ax2 = axes[1]
@@ -471,14 +486,15 @@ def grafico_distribuicao_cv(search_rf):
                    edgecolor="white", alpha=0.85)
     ax2.errorbar(range(len(top_idx)), top_mse, yerr=top_std,
                  fmt="none", color="#374151", capsize=3, lw=1.0)
-    ax2.axhline(META_MSE, color="red", lw=1.2, linestyle="--",
-                label=f"Meta MSE = {META_MSE}")
+    # Sem linha de meta: este eixo mostra o MSE da busca, que está em escala
+    # log1p, enquanto a meta vive na escala original do CBR. Traçar uma
+    # contra a outra comparava grandezas diferentes.
     for bar, val in zip(bars, top_mse):
         ax2.text(bar.get_x() + bar.get_width() / 2, bar.get_height() + 0.005,
-                 f"{val:.3f}", ha="center", va="bottom", fontsize=7, fontweight="bold")
+                 f"{val:.3f}", ha="center", va="bottom", fontsize=9, fontweight="bold")
 
     ax2.set_xlabel("Ranking"); ax2.set_ylabel("MSE CV")
-    ax2.legend(framealpha=0)
+    ax2.legend()
 
     plt.tight_layout()
     plots.save(plt.gcf(), "distribuicao_cv", "random_forest")
@@ -489,7 +505,7 @@ def grafico_distribuicao_cv(search_rf):
 # ─────────────────────────────────────────────
 print("=" * 60)
 print("  RANDOM FOREST — MODELO ÚNICO — ALTA PERFORMANCE")
-print(f"  META: MSE < {META_MSE}")
+print(f"  META: R² >= {META_R2:.2f} no teste")
 print("=" * 60)
 print("\n[1/6] Carregando dados...")
 
@@ -584,7 +600,11 @@ with progress.bar(total=N_ITER_BUSCA * CV_FOLDS) as _stage:
         search_rf.fit(X_treino_n, Y_treino,
                       rf__sample_weight=sample_weights)
 best_rf_params = {k.replace("rf__", ""): v for k, v in search_rf.best_params_.items()}
-print(f"     Melhor MSE CV (RF): {-search_rf.best_score_:.4f}")
+# Este score sai em escala log1p (a busca treina sobre Y ja transformado),
+# entao NAO e comparavel com META_MSE, que vive na escala original do CBR.
+# A metrica comparavel e a de validacao cruzada calculada na secao 6.
+_escala = " (escala log1p — nao comparavel com a meta)" if LOG_ALVO else ""
+print(f"     Melhor MSE CV (RF): {-search_rf.best_score_:.4f}{_escala}")
 print(f"     Melhores parâmetros: {best_rf_params}")
 
 # ─────────────────────────────────────────────
@@ -612,27 +632,53 @@ print("     Modelo treinado em treino + validação.")
 # ─────────────────────────────────────────────
 print("\n[6/6] Avaliando modelo...")
 
-pred_val   = rf_final.predict(X_val_n)
+# ── Estimativa de generalização: validação cruzada out-of-fold ──────────────
+#
+# A versão anterior media a "validação" com `rf_final.predict(X_val_n)`. Como
+# `rf_final` é treinado em treino+validação (X_tv), o conjunto de validação já
+# tinha sido visto: aquela métrica era erro de treino disfarçado de erro de
+# generalização — otimista por construção (data leakage).
+#
+# Aqui a estimativa vem do CV com a melhor configuração, ajustada SOMENTE no
+# conjunto de treino. Cada previsão é feita por um modelo que não viu aquela
+# amostra, então é honesta. E, por usar todo o treino em vez de um holdout de
+# ~12% das linhas, é também menos ruidosa que a validação antiga.
+print(f"     Validação cruzada out-of-fold ({CV_FOLDS} dobras)...")
+
+rf_cv     = RandomForestRegressor(**best_rf_params, random_state=SEED, n_jobs=-1)
+params_cv = {"sample_weight": sample_weights} if sample_weights is not None else None
+
+with progress.bar(total=CV_FOLDS) as _stage:
+    with progress.joblib_stage(_stage):
+        pred_cv = cross_val_predict(rf_cv, X_treino_n, Y_treino,
+                                    cv=kf, n_jobs=-1, params=params_cv)
+
 pred_teste = rf_final.predict(X_teste_n)
 
 if LOG_ALVO:
-    pred_val    = np.expm1(pred_val)
+    pred_cv     = np.expm1(pred_cv)
     pred_teste  = np.expm1(pred_teste)
-    Y_val_met   = np.expm1(Y_val)
+    Y_cv_met    = np.expm1(Y_treino)
     y_teste_met = np.expm1(y_teste)
     print("     Previsões revertidas para escala original (expm1).")
 else:
-    Y_val_met   = Y_val
+    Y_cv_met    = Y_treino
     y_teste_met = y_teste
 
-met_val   = metricas(Y_val_met,   pred_val,   "Validação   — Random Forest")
+# Limiar de MSE equivalente a META_R2 na variância real do conjunto de teste.
+META_MSE = metrics.meta_mse(y_teste_met)
+print(f"     Meta: R² >= {META_R2:.2f}  (MSE <= {META_MSE:.2f} nesta amostra)")
+
+met_cv    = metricas(Y_cv_met,    pred_cv,    "Validação CV — Random Forest")
 met_teste = metricas(y_teste_met, pred_teste, "Teste Final — Random Forest")
 
 print("\n" + "=" * 60)
-if met_teste["mse"] < META_MSE:
-    print(f"  META ATINGIDA! MSE = {met_teste['mse']:.4f} < {META_MSE}")
+if met_teste["r2"] >= META_R2:
+    print(f"  META ATINGIDA! R² = {met_teste['r2']:.4f} >= {META_R2:.2f}"
+          f"  (MSE {met_teste['mse']:.2f} <= {META_MSE:.2f})")
 else:
-    print(f"  MSE = {met_teste['mse']:.4f}  |  Meta: < {META_MSE}")
+    print(f"  R² = {met_teste['r2']:.4f}  |  Meta: >= {META_R2:.2f}"
+          f"  (MSE {met_teste['mse']:.2f}  |  Meta: <= {META_MSE:.2f})")
 print("=" * 60)
 
 # Guarda o resultado do teste para o menu mostrar depois, sem treinar de novo.
@@ -643,10 +689,10 @@ scoreboard.record("random_forest", "Árvore Aleatória — modelo único", met_t
 # ─────────────────────────────────────────────
 print("\n--- Gerando Gráficos ---")
 
-grafico_previsto_vs_real_validacao(Y_val_met, pred_val, met_val)
+grafico_previsto_vs_real_validacao(Y_cv_met, pred_cv, met_cv)
 grafico_previsto_vs_real_teste(y_teste_met, pred_teste, met_teste)
-grafico_tabela_metricas(met_val, met_teste)
-grafico_residuos_validacao(Y_val_met, pred_val)
+grafico_tabela_metricas(met_cv, met_teste)
+grafico_residuos_validacao(Y_cv_met, pred_cv)
 grafico_residuos_teste(y_teste_met, pred_teste)
 grafico_importancia_features(rf_final, feature_names)
 

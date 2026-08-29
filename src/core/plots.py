@@ -96,7 +96,29 @@ def apply_style() -> None:
         "axes.spines.top": False,
         "axes.spines.right": False,
         "axes.titlesize": 0,      # os títulos são removidos; deixa-os invisíveis
-        "legend.framealpha": 0.0,
+
+        # Legenda legível por padrão. Como o projeto não usa títulos, a legenda
+        # carrega a explicação da figura — e uma caixa transparente (o padrão
+        # anterior, framealpha=0.0) deixava esse texto pousado direto sobre
+        # pontos e barras, ilegível justamente na região mais densa do gráfico.
+        # Caixa branca opaca com borda: o texto passa a ter fundo próprio.
+        "legend.frameon": True,
+        "legend.framealpha": 0.93,
+        "legend.facecolor": "#FFFFFF",
+        "legend.edgecolor": PALETTE["grid"],
+        "legend.fancybox": True,
+        "legend.fontsize": 10.5,
+        "legend.borderpad": 0.6,
+        "legend.labelspacing": 0.5,
+        "legend.handlelength": 1.8,
+        "legend.borderaxespad": 0.6,
+
+        # Rótulos de eixo e marcações acompanham o aumento: a figura vai para
+        # uma dissertação, onde é reduzida na diagramação.
+        "axes.labelsize": 11.5,
+        "xtick.labelsize": 10,
+        "ytick.labelsize": 10,
+
         "figure.autolayout": False,
     })
 
@@ -152,7 +174,15 @@ def legend(axes, **kwargs):
     handles, labels = axes.get_legend_handles_labels()
     if not handles:
         return None
-    options = {"framealpha": 0.0, "fontsize": 9}
+    options = {
+        "framealpha": 0.93,
+        "facecolor": "#FFFFFF",
+        "edgecolor": PALETTE["grid"],
+        "fancybox": True,
+        "fontsize": 10.5,
+        "borderpad": 0.6,
+        "labelspacing": 0.5,
+    }
     options.update(kwargs)
     return axes.legend(handles, labels, **options)
 
@@ -183,7 +213,7 @@ def legend_below(figure, axes, ncol: int = 3, y: float = 0.02, **kwargs):
         "bbox_to_anchor": (0.5, y),
         "ncol": ncol,
         "frameon": False,
-        "fontsize": 9,
+        "fontsize": 10.5,
     }
     options.update(kwargs)
     return figure.legend(handles, labels, **options)
@@ -198,13 +228,13 @@ def legend_right(figure, axes, **kwargs):
         "loc": "center left",
         "bbox_to_anchor": (1.0, 0.5),
         "frameon": False,
-        "fontsize": 9,
+        "fontsize": 10.5,
     }
     options.update(kwargs)
     return figure.legend(handles, labels, **options)
 
 
-def caption(figure, lines: list[str], fontsize: int = 8) -> None:
+def caption(figure, lines: list[str], fontsize: float = 9.5) -> None:
     """
     Bloco de texto explicativo no rodapé da figura.
 

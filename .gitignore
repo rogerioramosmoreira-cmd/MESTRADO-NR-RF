@@ -25,3 +25,4 @@ Thumbs.db
 # Saída do modo rápido (MLL_FAST=1) — descartável
 models_rapido/
 reports/figures_rapido/
+reports/metrics_rapido/
