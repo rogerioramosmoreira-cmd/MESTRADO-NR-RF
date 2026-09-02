@@ -1,0 +1,11 @@
+{
+  "key": "random_forest_quintis_full",
+  "label": "Árvore Aleatória — quintis completo",
+  "split": "teste",
+  "recorded_at": "2026-09-02T10:33:12",
+  "r2": 0.8729845382394866,
+  "mae": 2.968514423098588,
+  "rmse": 6.264210277011953,
+  "mse": 39.24033039462218,
+  "faixas": 5
+}

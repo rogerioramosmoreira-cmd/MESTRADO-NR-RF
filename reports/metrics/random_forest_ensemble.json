@@ -1,0 +1,12 @@
+{
+  "key": "random_forest_ensemble",
+  "label": "Árvore Aleatória — ensemble",
+  "split": "teste",
+  "recorded_at": "2026-09-02T10:27:12",
+  "r2": 0.8362149206522751,
+  "mae": 4.50171302159348,
+  "rmse": 6.754077596912887,
+  "mse": 45.61756418512056,
+  "mape": 33.68385236295164,
+  "mse_training_scale": 0.12223053309485021
+}

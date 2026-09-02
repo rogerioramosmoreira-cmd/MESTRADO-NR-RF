@@ -1,0 +1,33 @@
+{
+  "cenario": "D2",
+  "features_cenario": [
+    "25.4mm",
+    "9.5mm",
+    "4.8mm",
+    "2.0mm",
+    "0.42mm",
+    "0.076mm",
+    "LL",
+    "IP",
+    "Umidade Ótima",
+    "Densidade máxima"
+  ],
+  "feature_names": [
+    "25.4mm",
+    "9.5mm",
+    "4.8mm",
+    "2.0mm",
+    "0.42mm",
+    "0.076mm",
+    "LL",
+    "IP",
+    "Umidade Ótima",
+    "Densidade máxima"
+  ],
+  "engenharia_features": false,
+  "log_alvo": true,
+  "coluna_alvo": "CBR ",
+  "n_amostras": 157,
+  "cbr_min": 8.2,
+  "cbr_max": 10.9
+}

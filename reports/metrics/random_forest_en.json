@@ -1,0 +1,11 @@
+{
+  "key": "random_forest_en",
+  "label": "Árvore Aleatória — alta performance (EN)",
+  "split": "teste",
+  "recorded_at": "2026-09-02T10:18:35",
+  "r2": 0.8391947888585621,
+  "mae": 4.398913111823132,
+  "rmse": 6.692354494084371,
+  "mse": 44.78760867449127,
+  "mape": 33.921710113681854
+}

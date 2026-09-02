@@ -1,0 +1,11 @@
+{
+  "key": "random_forest_quintis",
+  "label": "Árvore Aleatória — quintis D1–D5",
+  "split": "teste",
+  "recorded_at": "2026-09-02T10:29:46",
+  "r2": 0.8729845382394866,
+  "mae": 2.9685144230985885,
+  "rmse": 6.264210277011954,
+  "mse": 39.240330394622184,
+  "faixas": 5
+}
